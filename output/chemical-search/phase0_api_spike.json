@@ -1,0 +1,139 @@
+{
+  "started_at": "2026-06-02T10:07:54.383119+00:00",
+  "compound": {
+    "name": "aspirin",
+    "formula": "C9H8O4",
+    "smiles": "CC(=O)Oc1ccccc1C(=O)O",
+    "inchi_key": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N"
+  },
+  "results": [
+    {
+      "name": "rdkit_normalize",
+      "status": "ok",
+      "latency_ms": 180,
+      "summary": "RDKit parsed and normalized the molecule.",
+      "error": null,
+      "data": {
+        "canonical_smiles": "CC(=O)Oc1ccccc1C(=O)O",
+        "formula": "C9H8O4",
+        "molecular_weight": 180.159,
+        "inchi_key": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N"
+      }
+    },
+    {
+      "name": "pubchem_name_lookup",
+      "status": "ok",
+      "latency_ms": 1056,
+      "summary": "Returned 1 PubChem property rows for name 'aspirin'.",
+      "error": null,
+      "data": {
+        "count": 1,
+        "first": {
+          "CID": 2244,
+          "MolecularFormula": "C9H8O4",
+          "MolecularWeight": "180.16",
+          "ConnectivitySMILES": "CC(=O)OC1=CC=CC=C1C(=O)O",
+          "InChIKey": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N"
+        }
+      }
+    },
+    {
+      "name": "pubchem_formula_lookup",
+      "status": "ok",
+      "latency_ms": 1852,
+      "summary": "Returned 1244 PubChem CID candidates for formula 'C9H8O4'.",
+      "error": null,
+      "data": {
+        "count": 1244,
+        "first_cids": [
+          2244,
+          689043,
+          20392,
+          979,
+          66643,
+          446611,
+          1549111,
+          46533,
+          75791,
+          636708
+        ]
+      }
+    },
+    {
+      "name": "chembl_similarity",
+      "status": "ok",
+      "latency_ms": 3592,
+      "summary": "Returned 5 ChEMBL similarity rows at threshold 80.",
+      "error": null,
+      "data": {
+        "count": 5,
+        "first_ids": [
+          "CHEMBL2296002",
+          "CHEMBL1697753",
+          "CHEMBL25",
+          "CHEMBL3833404",
+          "CHEMBL3833325"
+        ]
+      }
+    },
+    {
+      "name": "chembl_substructure",
+      "status": "ok",
+      "latency_ms": 5492,
+      "summary": "Returned 5 ChEMBL substructure rows.",
+      "error": null,
+      "data": {
+        "count": 5,
+        "first_ids": [
+          "CHEMBL25",
+          "CHEMBL7666",
+          "CHEMBL10222",
+          "CHEMBL10008",
+          "CHEMBL416921"
+        ]
+      }
+    },
+    {
+      "name": "semantic_scholar_search",
+      "status": "partial",
+      "latency_ms": 537,
+      "summary": "Semantic Scholar returned HTTP 429. Configure SEMANTIC_SCHOLAR_API_KEY or retry later.",
+      "error": null,
+      "data": {
+        "used_api_key": false,
+        "status_code": 429
+      }
+    },
+    {
+      "name": "crossref_search",
+      "status": "ok",
+      "latency_ms": 2898,
+      "summary": "Returned 5 Crossref work candidates.",
+      "error": null,
+      "data": {
+        "count": 5,
+        "first_titles": [
+          "Thrombosis and Aspirin: Clinical Aspect, Aspirin in Cardiology, Aspirin in Neurology, and Pharmacology of Aspirin",
+          "Aspirin desensitization as a treatment for aspirin-sensitive chronic spontaneous urticaria",
+          "Randomised study to compare aspirin versus hydroxyurea/aspirin in 'intermediate risk' primary thrombocythaemia (PT) and hydroxyurea/aspirin versus anagrelide/aspirin in 'high risk' primary thrombocythaemia"
+        ]
+      }
+    },
+    {
+      "name": "surechembl_discovery",
+      "status": "error",
+      "latency_ms": 0,
+      "summary": "SureChEMBL root discovery failed.",
+      "error": "SSLError(MaxRetryError(\"HTTPSConnectionPool(host='www.api.surechembl.org', port=443): Max retries exceeded with url: / (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate (_ssl.c:1006)')))\"))",
+      "data": {}
+    },
+    {
+      "name": "epo_ops_credentials",
+      "status": "skipped",
+      "latency_ms": 0,
+      "summary": "EPO OPS credentials are not configured. Set EPO_OPS_CONSUMER_KEY and EPO_OPS_CONSUMER_SECRET.",
+      "error": null,
+      "data": {}
+    }
+  ]
+}
