@@ -16,6 +16,8 @@
 - 초기 Git 저장소와 원격 연결 준비
 - Python Phase 0 spike 문법 검증 통과
 - 기존 WorldCup 앱 lint/smoke 실패 상태 기록
+- 초기 커밋 `13a31c5` 생성
+- `origin/main` 원격 푸시 성공
 
 ### 주의사항
 

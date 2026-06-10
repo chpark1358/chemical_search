@@ -39,4 +39,7 @@
 
 ## 커밋/푸시
 
-- 초기 커밋과 원격 푸시 결과는 Git 이력과 원격 `main` 브랜치에서 확인한다.
+- 초기 커밋: `13a31c5 chore: initialize chemical search project`
+- 원격 푸시: 성공
+- 원격 브랜치: `origin/main`
+- 저장소: `https://github.com/chpark1358/chemical_search.git`

@@ -8,6 +8,7 @@ Phase 0 API spike 1차 구현과 실행이 완료됐다. RDKit, PubChem, ChEMBL,
 
 ## 완료된 작업
 
+- GitHub 저장소 `https://github.com/chpark1358/chemical_search.git` 초기 커밋 및 `main` 푸시
 - 화학 구조 기반 특허/논문 검색 서비스 기획 문서 작성
 - MVP 범위 재검토 및 `POC -> MVP-1 -> MVP-2 -> Professional` 단계 분리
 - Provider Adapter 계약 초안 정의
