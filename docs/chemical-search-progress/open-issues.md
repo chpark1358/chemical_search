@@ -1,26 +1,23 @@
 # 오픈 이슈
 
-최종 업데이트: 2026-06-02
+최종 업데이트: 2026-06-10
 
 ## 높은 우선순위
 
 ### O-001: RDKit 실행 환경 결정
 
-상태: 부분 해결
+상태: 해결
 
 현재 결과:
 
 - Windows Python 3.11 사용자 환경에 `rdkit==2026.3.2` 설치 완료
 - aspirin SMILES normalize 성공
-
-남은 결정:
-
-- POC 이후에도 사용자 환경 설치를 유지할지
-- project venv, conda, Docker 중 하나로 고정할지
+- 프로젝트 전용 `.venv-chemical` 설치 스크립트 추가
+- Python 3.11과 직접 의존성 `requests==2.34.2`, `rdkit==2026.3.3` 고정
 
 영향:
 
-재현 가능한 개발/배포 환경을 결정해야 한다.
+로컬 POC와 테스트는 project venv를 사용한다. 배포 환경은 웹 API 단계에서 별도로 결정한다.
 
 ### O-002: SureChEMBL API 안정성 검증
 
@@ -78,6 +75,49 @@ patent metadata/family/legal 보강 가능 여부를 결정한다.
 영향:
 
 논문 검색 품질과 안정성에 영향이 있다.
+
+### O-008: 공개 provider rate limit과 재시도 정책
+
+상태: 부분 해결
+
+현재 결과:
+
+- Semantic Scholar는 인증 없는 요청에서 HTTP 429가 반복된다.
+- Crossref는 Phase 0 재실행 중 일시적으로 HTTP 429를 반환했지만 후속 POC 요청은 성공했다.
+- Phase 1 POC는 provider 실패를 partial 결과로 보존한다.
+- 성공 응답 file cache, 429/5xx/timeout retry, host 단위 요청 간격을 구현했다.
+- Crossref `mailto` 설정을 지원한다.
+
+확인 필요:
+
+- 동시 요청 제한
+- 운영 환경에서 적절한 요청 간격과 retry 횟수 조정
+- cache 삭제/보존 정책
+
+영향:
+
+Phase 2 웹 서비스 전에 구현하지 않으면 반복 검색 시 결과 안정성이 떨어질 수 있다.
+
+### O-009: 검색 상태 저장소와 background job
+
+상태: 미해결
+
+현재 결과:
+
+- FastAPI candidate selection/search 상태 계약을 구현했다.
+- 검색 상태는 프로세스 메모리에 저장된다.
+- FastAPI `BackgroundTasks`로 검색을 실행한다.
+
+확인 필요:
+
+- PostgreSQL search/candidate/result schema 적용
+- Redis/RQ 또는 다른 durable job queue 도입 시점
+- 서버 재시작과 다중 worker 환경의 상태 일관성
+- 검색 결과 보존 기간과 민감 query 삭제 정책
+
+영향:
+
+현재 구조는 로컬 MVP 개발에는 충분하지만 서버 재시작 또는 다중 worker 운영에는 사용할 수 없다.
 
 ## 중간 우선순위
 

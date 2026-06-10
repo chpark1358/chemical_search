@@ -1,14 +1,14 @@
 # 단계별 진행 상태
 
-최종 업데이트: 2026-06-02
+최종 업데이트: 2026-06-10
 
 ## 전체 단계
 
 | 단계 | 목표 | 상태 | 진행률 |
 |---|---|---|---:|
 | Phase 0 | 기술 검증 | 진행 중 | 45% |
-| Phase 1 | POC | 미시작 | 0% |
-| Phase 2 | MVP-1 | 미시작 | 0% |
+| Phase 1 | POC | 완료 | 100% |
+| Phase 2 | MVP-1 | 진행 중 | 85% |
 | Phase 3 | MVP-2 | 미시작 | 0% |
 | Phase 4 | Research workflow | 미시작 | 0% |
 | Phase 5 | Professional tier | 미시작 | 0% |
@@ -36,27 +36,34 @@
 
 완료 기준:
 
-- [ ] SMILES/name/formula 입력 처리
-- [ ] RDKit normalize 구현
-- [ ] PubChem/ChEMBL compound lookup 구현
-- [ ] ChEMBL similarity/substructure 구현
-- [ ] Semantic Scholar/Crossref paper lookup 구현
-- [ ] JSON/Markdown 결과 출력
-- [ ] source URL과 match reason 표시
+- [x] SMILES/name/formula 입력 처리
+- [x] RDKit normalize 구현
+- [x] PubChem/ChEMBL compound lookup 구현
+- [x] ChEMBL similarity/substructure 구현
+- [x] Semantic Scholar/Crossref paper lookup 구현
+- [x] JSON/Markdown 결과 출력
+- [x] source URL과 match reason 표시
 
 ## Phase 2: MVP-1
 
 목표: 사용 가능한 웹 UI와 후보 선택/결과 표시를 구현한다.
 
+진행 순서:
+
+1. provider cache/throttle/retry
+2. 결과 병합/중복 제거/ranking/evidence 계약
+3. 검색 API와 candidate selection
+4. 웹 UI와 Ketcher
+
 완료 기준:
 
-- [ ] Next.js 검색 UI
+- [x] Next.js 검색 UI
 - [ ] Ketcher 구조 입력
-- [ ] candidate selection UI/API
-- [ ] 결과 병합/랭킹/evidence 표시
-- [ ] CSV/Markdown export
-- [ ] partial result 처리
-- [ ] basic cache/throttle
+- [x] candidate selection UI/API
+- [x] 결과 병합/랭킹/evidence 표시
+- [x] CSV/Markdown export
+- [x] partial result 처리
+- [x] basic cache/throttle
 
 ## Phase 3: MVP-2
 

@@ -1,5 +1,129 @@
 # 개발 진행 로그
 
+## 2026-06-10: 출처 신뢰도와 자료 처리 흐름 안내 UI 추가
+
+상태: 완료
+
+### 목적
+
+사용자가 검색 결과의 출처별 역할과 앱의 자료 수집·정리 방식을 쉽게 이해하고 올바르게 해석할 수 있게 한다.
+
+### 진행 내용
+
+- PubChem, ChEMBL, Crossref, Semantic Scholar, Google Patents의 권장 용도와 한계 표시
+- 구조 식별, 생물활성, 논문 식별, 특허 탐색별 우선 출처 안내
+- 입력 감지부터 구조 정규화, 병렬 수집, 중복 제거, 결과 표시까지 5단계 처리 흐름 시각화
+- Rank score가 과학적 정확도나 법적 판단 점수가 아님을 명시
+- 각 provider 공식 문서 링크 추가
+
+### 검증
+
+- `npm run lint`와 `npm run build` 통과
+- 좁은 브라우저 화면에서 카드 세로 정렬과 안내 문구 가독성 확인
+- 브라우저 콘솔 경고/오류 없음
+
+## 2026-06-10: Phase 2 Chemical Search 웹 UI 구현
+
+상태: 완료
+
+### 목적
+
+기존 월드컵 화면과 분리된 Chemical Search 작업공간에서 FastAPI 검색, 후보 선택, 결과 확인, export 흐름을 실제로 사용할 수 있게 한다.
+
+### 진행 내용
+
+- `/chemical` 전용 Next.js route와 metadata 추가
+- `/chemical-api` 동일 출처 rewrite와 typed API client 추가
+- name/formula/SMILES 입력, 검색 모드, threshold, provider 선택 UI 추가
+- formula 후보 선택과 검색 상태 polling 추가
+- normalized compound, provider diagnostics, partial 상태, ranked result/evidence 표시
+- JSON/Markdown/CSV export 링크 추가
+
+### 검증
+
+- `npm run lint` 통과
+- `npm run build` 통과, `/chemical` static route 생성
+- Chemical 백엔드 단위/API 테스트 14개 통과
+- 실제 브라우저 aspirin 검색과 `C9H8O4` 후보 선택 흐름 통과
+- 실제 브라우저 콘솔 경고/오류 없음
+
+### 다음 작업
+
+1. Ketcher 구조 입력 검증 및 통합
+2. 브라우저 회귀 테스트 자동화
+3. 인메모리 검색 상태 저장소 교체 설계
+
+## 2026-06-10: Phase 2 계획 재정렬 및 기반 구현
+
+상태: 완료
+
+### 목적
+
+Phase 1 결과를 기준으로 기존 웹 UI 우선 계획을 점검하고, API/UI 재작업을 줄이도록 Phase 2 선행 기반을 구현한다.
+
+### 진행 내용
+
+- 구현 순서를 `provider 안정화 -> 결과 계약 -> 검색 API -> 웹 UI`로 변경
+- project Python 3.11 venv와 직접 의존성 버전 고정
+- hashed file cache, retry/backoff, throttle, Crossref `mailto` 지원
+- InChIKey/DOI 중복 제거, deterministic ranking, evidence 구조화
+- CSV export와 10개 품질 fixture 추가
+- FastAPI normalize/search/candidate selection/result/export API 추가
+- 인메모리 검색 상태의 운영 한계를 오픈 이슈로 기록
+
+### 검증
+
+- project venv에서 단위/API 계약 테스트 12개 통과
+- 정규화 품질 fixture 10/10 통과
+- 실제 aspirin name/formula 검색과 cache hit 확인
+- FastAPI 실제 서버 `/health`, `/api/chem/normalize` smoke test 통과
+
+### 다음 작업
+
+1. Chemical Search 전용 Next.js 화면과 FastAPI client 구현
+2. candidate selection/ranked result/evidence UI 구현
+3. Ketcher 통합
+4. PostgreSQL/Redis 기반 상태 저장 설계
+
+## 2026-06-10: Phase 1 Chemical Search CLI POC 구현
+
+상태: 완료
+
+### 목적
+
+구조 정규화와 compound/paper 검색의 핵심 흐름을 웹 UI 이전에 CLI로 검증한다.
+
+### 진행 내용
+
+- SMILES/name/formula/InChI/InChIKey 입력 감지 구현
+- RDKit 구조 정규화 구현
+- PubChem 후보 resolver 구현
+- ChEMBL exact/similarity/substructure adapter 구현
+- Semantic Scholar/Crossref paper adapter 구현
+- provider 실패 시 partial result 유지
+- JSON/Markdown 출력과 source URL/match reason 표시
+- 단위 테스트와 실제 aspirin 검색 실행
+
+### 변경 파일
+
+- `scripts/chemical_search/`
+- `tests/test_chemical_search_poc.py`
+- `docs/chemical-search-progress/`
+
+### 검증
+
+- 단위 테스트 5개 통과
+- aspirin name 검색 성공
+- `C9H8O4` formula 후보 선택 검색 성공
+- aspirin SMILES 검색 성공
+- invalid SMILES partial 결과 확인
+
+### 다음 작업
+
+1. Phase 2 웹 검색 UI와 API 설계
+2. provider cache/throttle/retry 구현
+3. 결과 병합, 중복 제거, ranking 구현
+
 ## 2026-06-10: GitHub 저장소 초기 설정 및 커밋
 
 상태: 완료

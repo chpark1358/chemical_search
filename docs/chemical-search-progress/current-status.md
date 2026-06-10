@@ -1,10 +1,10 @@
 # 현재 개발 상태
 
-최종 업데이트: 2026-06-02
+최종 업데이트: 2026-06-10
 
 ## 한 줄 요약
 
-Phase 0 API spike 1차 구현과 실행이 완료됐다. RDKit, PubChem, ChEMBL, Crossref는 사용 가능성이 확인됐고, Semantic Scholar는 API key 필요 가능성, SureChEMBL은 TLS 인증서 문제가 확인됐다.
+Phase 2 MVP-1이 진행 중이다. provider 안정화와 FastAPI 검색 계약 위에 월드컵 UI와 분리된 Chemical Search 웹 화면, 후보 선택, 결과/evidence/diagnostics, export 흐름까지 구현됐다.
 
 ## 완료된 작업
 
@@ -22,12 +22,34 @@ Phase 0 API spike 1차 구현과 실행이 완료됐다. RDKit, PubChem, ChEMBL,
 - PubChem name/formula lookup 검증
 - ChEMBL similarity/substructure query 검증
 - Crossref bibliographic query 검증
+- Phase 1 CLI POC 모듈 구조 생성
+- SMILES/name/formula 입력 감지와 RDKit 구조 정규화 구현
+- PubChem candidate resolver 구현
+- ChEMBL exact/similarity/substructure adapter 구현
+- Semantic Scholar/Crossref paper adapter 구현
+- provider 장애 시 partial result 유지 구현
+- JSON/Markdown 결과와 source URL/match reason 출력 구현
+- 네트워크 없이 실행되는 POC 단위 테스트 추가
+- 프로젝트 전용 Python 3.11 venv와 직접 의존성 버전 고정
+- provider 성공 응답 hashed file cache 구현
+- 429/5xx/timeout retry와 host 단위 throttle 구현
+- InChIKey/DOI 기반 결과 병합과 deterministic ranking 구현
+- 결과별 구조화 evidence와 provider diagnostics 구현
+- CSV export와 10개 정규화 품질 fixture 구현
+- FastAPI normalize/search/candidate selection/result/export API 구현
+- `/chemical` 전용 Next.js 검색 작업공간 구현
+- 동일 출처 `/chemical-api` rewrite 기반 FastAPI client 구현
+- name/formula/SMILES 검색 조건과 provider 선택 UI 구현
+- formula 후보 선택, polling, ranked result/evidence/partial diagnostics UI 구현
+- JSON/Markdown/CSV export UI 구현
+- 정규화 화합물 기준 Google Patents 외부 검색 링크 구현
+- 출처별 권장 용도·신뢰도와 현재 자료 처리 흐름을 설명하는 사용자 안내 UI 구현
 
 ## 현재 단계
 
-- 단계: Phase 0 기술 검증
+- 단계: Phase 2 MVP-1
 - 상태: 진행 중
-- 진행률: 약 45%
+- 진행률: 약 85%
 
 ## 현재 주요 결과
 
@@ -40,6 +62,18 @@ Phase 0 API spike 1차 구현과 실행이 완료됐다. RDKit, PubChem, ChEMBL,
 - `semantic_scholar_search`: partial, HTTP 429로 API key 필요 가능성
 - `surechembl_discovery`: error, TLS certificate verification failure
 - `epo_ops_credentials`: skipped, credentials 미설정
+- `phase1_name_search`: ok, aspirin 조회 성공
+- `phase1_formula_search`: ok, `C9H8O4` 후보 선택 후 조회 성공
+- `phase1_smiles_search`: ok, aspirin SMILES 조회 성공
+- `phase1_invalid_smiles`: partial, 오류를 결과에 표시하고 정상 종료
+- `provider_cache`: ok, 동일 검색의 두 번째 요청이 cache hit로 처리됨
+- `result_merge`: ok, PubChem/ChEMBL aspirin 결과가 InChIKey 기준으로 병합됨
+- `quality_fixture`: ok, 정규화 10/10 통과
+- `fastapi_contract`: ok, normalize와 candidate selection 상태/API export 테스트 통과
+- `next_chemical_ui`: ok, lint/build 통과 및 `/chemical` route 생성 확인
+- `browser_name_search`: ok, aspirin 실제 검색에서 normalized compound와 21개 병합 결과 표시
+- `browser_formula_selection`: ok, `C9H8O4` 후보 목록에서 Aspirin 선택 후 결과 표시
+- `browser_console`: ok, 경고/오류 없음
 
 ## 현재 주요 산출물
 
@@ -48,11 +82,27 @@ Phase 0 API spike 1차 구현과 실행이 완료됐다. RDKit, PubChem, ChEMBL,
 - `output/chemical-search/phase0_api_spike.md`
 - `output/chemical-search/phase0_api_spike.json`
 - `docs/chemical-search-progress/session-reports/2026-06-02-phase0-api-spike.md`
+- `scripts/chemical_search/poc_cli.py`
+- `scripts/chemical_search/pipeline.py`
+- `scripts/chemical_search/providers.py`
+- `scripts/chemical_search/normalize.py`
+- `tests/test_chemical_search_poc.py`
+- `docs/chemical-search-progress/session-reports/2026-06-10-phase1-poc.md`
+- `scripts/chemical_search/cache.py`
+- `scripts/chemical_search/results.py`
+- `scripts/chemical_search/evaluate_quality.py`
+- `scripts/chemical_search/api.py`
+- `docs/chemical-search-progress/execution-plan.md`
+- `docs/chemical-search-progress/session-reports/2026-06-10-phase2-foundation.md`
+- `src/app/chemical/`
+- `src/components/chemical/ChemicalSearchWorkspace.tsx`
+- `src/lib/chemical-api.ts`
+- `docs/chemical-search-progress/session-reports/2026-06-10-phase2-web-ui.md`
 
 ## 다음 작업 후보
 
-1. SureChEMBL endpoint/TLS 문제 조사
-2. Semantic Scholar API key 설정 또는 fallback 전략 확정
-3. EPO OPS credentials 확보 여부 결정
-4. POC용 normalize/search API 구조 설계
-5. Phase 1 POC 프로젝트 구조 생성
+1. Ketcher 구조 입력 검증 및 통합
+2. Google Patents Public Datasets BigQuery provider 타당성 검증
+3. 검색 상태 저장소를 PostgreSQL/Redis 기반으로 교체
+4. Chemical Search 브라우저 회귀 테스트 자동화
+5. SureChEMBL/EPO OPS MVP-2 go/no-go 결정

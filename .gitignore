@@ -9,6 +9,7 @@ coverage/
 test-results/
 __pycache__/
 *.py[cod]
+.venv-chemical/
 .env
 .env*.local
 npm-debug.log*
@@ -18,5 +19,7 @@ pnpm-debug.log*
 docs/*.bak-review-*
 output/*
 !output/chemical-search/
+output/chemical-search/*
 !output/chemical-search/phase0_api_spike.json
 !output/chemical-search/phase0_api_spike.md
+*.tsbuildinfo

@@ -95,3 +95,71 @@ Phase 0은 빠른 검증이 목적이므로 Docker/conda 환경 분리보다 즉
 ### 영향
 
 POC 이후에는 재현 가능한 개발 환경을 위해 venv, conda, Docker 중 하나로 고정해야 한다.
+
+## D-006: Phase 1 POC는 Python CLI와 공통 ProviderResult 계약으로 구현한다
+
+날짜: 2026-06-10
+상태: 확정
+
+### 결정
+
+Phase 1은 웹 UI를 만들기 전에 Python CLI로 구현한다. 입력 감지, RDKit 정규화, provider adapter, 검색 파이프라인, 결과 렌더링을 분리하고 모든 provider는 공통 `ProviderResult` 형식을 반환한다.
+
+### 이유
+
+외부 API의 rate limit과 장애를 UI 구현과 분리해 검증할 수 있고, provider 하나가 실패해도 나머지 결과를 partial로 유지하기 쉽다.
+
+### 영향
+
+Phase 2 웹 API는 현재 파이프라인을 호출하는 얇은 계층으로 설계할 수 있다. provider별 cache/throttle/retry와 결과 병합은 다음 단계에서 추가해야 한다.
+
+## D-007: Phase 2는 결과 계약과 provider 안정화를 UI보다 먼저 구현한다
+
+날짜: 2026-06-10
+상태: 확정
+
+### 결정
+
+Phase 2 구현 순서를 `provider 안정화 -> 결과 병합/랭킹/evidence -> 검색 API -> 웹 UI/Ketcher`로 변경한다.
+
+### 이유
+
+결과 계약이 고정되기 전에 API와 UI를 만들면 provider 장애 처리, 중복 제거, ranking 추가 시 응답 형식과 화면을 반복 수정해야 한다.
+
+### 영향
+
+웹 UI 착수는 늦어지지만 API/UI 재작업을 줄이고 같은 입력에 대한 결과 재현성과 테스트 가능성을 높인다.
+
+## D-008: RDKit 검색 백엔드는 FastAPI 서비스로 분리한다
+
+날짜: 2026-06-10
+상태: 확정
+
+### 결정
+
+RDKit 정규화, provider adapter, 검색 상태, 결과 병합은 Python FastAPI 서비스에 둔다. Next.js는 FastAPI를 호출하는 프론트엔드로 사용하며 Python 프로세스를 Next.js route에서 직접 실행하지 않는다.
+
+### 이유
+
+RDKit과 현재 검색 파이프라인이 Python 기반이고, 프로세스 직접 실행 방식은 요청 수명, 오류 처리, 배포, 상태 저장에 취약하다.
+
+### 영향
+
+로컬 개발에서는 Next.js와 FastAPI를 별도 프로세스로 실행한다. 현재 검색 상태는 인메모리이며 MVP-1 운영 전 PostgreSQL/Redis 또는 job queue로 교체해야 한다.
+
+## D-009: Google Patents는 우선 외부 검색 링크로 통합한다
+
+날짜: 2026-06-10
+상태: 확정
+
+### 결정
+
+선택된 정규화 화합물의 이름, 분자식, InChIKey를 조합한 Google Patents 검색 링크를 제공한다. Google Patents 웹 검색 결과를 직접 스크래핑해 provider 결과로 병합하지 않는다.
+
+### 이유
+
+Google Patents 웹 검색은 사람이 조사하기에는 유용하지만 일반 검색 결과용 공개 API 계약이 명확하지 않다. 자동 수집은 웹 화면 스크래핑보다 Google Patents Public Datasets의 BigQuery 연동이 안정적이다.
+
+### 영향
+
+MVP-1 사용자는 Chemical Search 결과에서 Google Patents로 바로 이동할 수 있다. 특허 결과 자동 수집과 evidence 병합은 BigQuery 비용, 인증, 쿼리 범위를 검증한 뒤 MVP-2 provider로 구현한다.
