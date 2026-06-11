@@ -98,9 +98,26 @@ async function load(): Promise<void> {
   }
 }
 
-/** 변경 구독. 첫 구독 시 1회 fetch한다. 반환값으로 구독 해제. */
+// 세션 하이드레이트 전 첫 load()가 익명으로 0건을 받는 레이스를 막기 위해 인증
+// 상태가 준비/변경되면 재조회한다. 로그아웃 시 캐시를 비운다.
+let authWired = false;
+function ensureAuthWired(): void {
+  if (authWired) return;
+  authWired = true;
+  createClient().auth.onAuthStateChange((event, session) => {
+    if (event === "SIGNED_OUT") {
+      loaded = true;
+      setSnapshot([]);
+    } else if (session) {
+      void load();
+    }
+  });
+}
+
+/** 변경 구독. 첫 구독 시 1회 fetch하고 인증 변화에 재조회를 연결한다. */
 export function subscribeHistory(listener: () => void): () => void {
   listeners.add(listener);
+  ensureAuthWired();
   if (!loaded && !loading) void load();
   return () => {
     listeners.delete(listener);

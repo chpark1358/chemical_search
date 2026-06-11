@@ -132,9 +132,27 @@ export function refreshSaved(): void {
   void load();
 }
 
-/** 변경 구독. 첫 구독 시 1회 fetch한다. 반환값으로 구독 해제. */
+// 세션이 쿠키에서 하이드레이트되기 전에 첫 load()가 익명으로 0건을 받는 레이스를
+// 막기 위해, 인증 상태가 준비/변경되면 재조회한다. 로그아웃 시에는 캐시를 비운다.
+let authWired = false;
+function ensureAuthWired(): void {
+  if (authWired) return;
+  authWired = true;
+  createClient().auth.onAuthStateChange((event, session) => {
+    if (event === "SIGNED_OUT") {
+      loaded = true;
+      setSnapshot([]);
+    } else if (session) {
+      // INITIAL_SESSION / SIGNED_IN / TOKEN_REFRESHED: 토큰이 준비된 시점에 재조회.
+      void load();
+    }
+  });
+}
+
+/** 변경 구독. 첫 구독 시 1회 fetch하고 인증 변화에 재조회를 연결한다. */
 export function subscribeSaved(listener: () => void): () => void {
   listeners.add(listener);
+  ensureAuthWired();
   if (!loaded && !loading) void load();
   return () => {
     listeners.delete(listener);
