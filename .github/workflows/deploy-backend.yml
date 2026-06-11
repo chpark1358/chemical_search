@@ -1,0 +1,72 @@
+name: deploy-backend
+
+# Syncs the Python backend (scripts/) to the private Hugging Face Space on every
+# push that changes it, so backend changes auto-deploy like the Vercel frontend.
+# Requires repo secret HF_WRITE_TOKEN (an HF token with WRITE access to the
+# Rufuspark/chemical-search-api Space). HF rebuilds the Docker image on push.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/**"
+      - ".github/workflows/deploy-backend.yml"
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Push backend to HF Space
+        env:
+          HF_WRITE_TOKEN: ${{ secrets.HF_WRITE_TOKEN }}
+        run: |
+          if [ -z "$HF_WRITE_TOKEN" ]; then
+            echo "HF_WRITE_TOKEN secret not set — skipping. Add it in repo Settings → Secrets → Actions."
+            exit 1
+          fi
+          SPACE="Rufuspark/chemical-search-api"
+          rm -rf /tmp/space && git clone "https://Rufuspark:${HF_WRITE_TOKEN}@huggingface.co/spaces/${SPACE}" /tmp/space
+          cat > /tmp/space/README.md <<'MD'
+          ---
+          title: Chemical Search API
+          emoji: 🧪
+          colorFrom: indigo
+          colorTo: blue
+          sdk: docker
+          app_port: 7860
+          pinned: false
+          ---
+
+          # Chemical Search API (backend)
+
+          Papers-only chemical literature + patent search backend (FastAPI + RDKit).
+          Private Space; the Vercel frontend proxies here with a token. Auto-synced
+          from the GitHub repo by .github/workflows/deploy-backend.yml.
+          MD
+          cat > /tmp/space/Dockerfile <<'DOCKER'
+          FROM python:3.11-slim
+          WORKDIR /app
+          RUN apt-get update \
+              && apt-get install -y --no-install-recommends libxrender1 libxext6 \
+              && rm -rf /var/lib/apt/lists/*
+          COPY scripts/chemical_search/requirements-poc.txt ./requirements.txt
+          RUN pip install --no-cache-dir -r requirements.txt
+          COPY scripts ./scripts
+          ENV CHEMICAL_SEARCH_CACHE_DIR=/tmp/chemical-cache
+          EXPOSE 7860
+          CMD ["sh", "-c", "uvicorn --app-dir scripts chemical_search.api:app --host 0.0.0.0 --port 7860 --workers 1"]
+          DOCKER
+          rm -rf /tmp/space/scripts
+          cp -r scripts /tmp/space/scripts
+          cd /tmp/space
+          git config user.email "actions@github.com"
+          git config user.name "github-actions"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No backend changes to sync."
+          else
+            git commit -m "Sync backend from ${GITHUB_SHA::7}"
+            git push origin main
+            echo "Backend synced to HF Space."
+          fi
