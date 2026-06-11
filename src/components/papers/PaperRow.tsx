@@ -11,6 +11,7 @@ import { highlightTerm, sanitizeAbstract } from "@/lib/text";
 import CopyButton from "./CopyButton";
 import { providerLabel } from "./ProviderChips";
 import SelectCheckbox from "./SelectCheckbox";
+import StarButton from "./StarButton";
 
 /** 인용수가 이 값 이상이면 고인용 논문으로 강조한다. */
 const HIGH_CITATION_THRESHOLD = 100;
@@ -51,6 +52,9 @@ interface PaperRowProps {
   /** 다중 선택 체크 상태와 토글 핸들러. */
   checked: boolean;
   onToggleCheck: () => void;
+  /** 저장(즐겨찾기) 상태와 토글 핸들러. */
+  saved: boolean;
+  onToggleSave: () => void;
 }
 
 /** 출처 칩에 표시할 라벨(대표 출처를 제외한 추가 출처들). */
@@ -64,7 +68,9 @@ export default function PaperRow({
   onSelect,
   highlight = "",
   checked,
-  onToggleCheck
+  onToggleCheck,
+  saved,
+  onToggleSave
 }: PaperRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [showSources, setShowSources] = useState(false);
@@ -183,25 +189,28 @@ export default function PaperRow({
             </p>
           ) : null}
         </div>
-        {cleanAbstract ? (
-          <button
-            aria-expanded={expanded}
-            aria-label={expanded ? "초록 접기" : "초록 펼치기"}
-            className="ml-auto mt-0.5 shrink-0 rounded-md p-1 text-ink-subtle transition-colors duration-150 hover:bg-surface-3 hover:text-ink"
-            onClick={(event) => {
-              event.stopPropagation();
-              setExpanded((value) => !value);
-            }}
-            type="button"
-          >
-            <ChevronDown
-              aria-hidden="true"
-              className={`size-4 transition-transform duration-150 ${
-                expanded ? "rotate-180" : ""
-              }`}
-            />
-          </button>
-        ) : null}
+        <div className="ml-auto flex shrink-0 items-start gap-0.5">
+          <StarButton label={paper.title} onToggle={onToggleSave} saved={saved} />
+          {cleanAbstract ? (
+            <button
+              aria-expanded={expanded}
+              aria-label={expanded ? "초록 접기" : "초록 펼치기"}
+              className="mt-0.5 shrink-0 rounded-md p-1 text-ink-subtle transition-colors duration-150 hover:bg-surface-3 hover:text-ink"
+              onClick={(event) => {
+                event.stopPropagation();
+                setExpanded((value) => !value);
+              }}
+              type="button"
+            >
+              <ChevronDown
+                aria-hidden="true"
+                className={`size-4 transition-transform duration-150 ${
+                  expanded ? "rotate-180" : ""
+                }`}
+              />
+            </button>
+          ) : null}
+        </div>
       </div>
       {cleanAbstract ? (
         <div className="mt-2 border-t border-hairline pt-2">

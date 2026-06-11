@@ -14,6 +14,9 @@ interface PaperListProps {
   /** 행 안정 키 → 다중 선택 체크 여부 판별. */
   isChecked: (paper: FoldedPaper) => boolean;
   onToggleCheck: (paper: FoldedPaper) => void;
+  /** 저장 여부 판별과 토글. */
+  isSaved: (paper: FoldedPaper) => boolean;
+  onToggleSave: (paper: FoldedPaper) => void;
 }
 
 export default function PaperList({
@@ -24,7 +27,9 @@ export default function PaperList({
   filtered = false,
   onResetFilters,
   isChecked,
-  onToggleCheck
+  onToggleCheck,
+  isSaved,
+  onToggleSave
 }: PaperListProps) {
   if (!papers.length) {
     // filtered=true인데 보이는 항목이 0이면 검색 결과가 아니라 필터가 다 숨긴 것이다.
@@ -63,7 +68,9 @@ export default function PaperList({
             highlight={highlight}
             onSelect={() => onSelect(index)}
             onToggleCheck={() => onToggleCheck(paper)}
+            onToggleSave={() => onToggleSave(paper)}
             paper={paper}
+            saved={isSaved(paper)}
             selected={index === selectedIndex}
           />
         </li>

@@ -441,6 +441,100 @@ test("후보 선택 흐름: needs_candidate_selection → 선택 → done", asyn
   expect(selectedCandidateId).toBe("c1");
 });
 
+test("Stage 3: 별로 논문 저장 → 저장됨 뷰에 표시 + 제목/메모 편집", async ({
+  page
+}) => {
+  await mockApi(page, {
+    create: () => record({ status: "running" }),
+    get: () =>
+      record({
+        status: "done",
+        compound: COMPOUND,
+        papers: PAPERS,
+        patents: PATENTS,
+        patents_total_hits: PATENTS_TOTAL_HITS,
+        providers: PROVIDERS_OK,
+        completed_at: "2026-06-11T00:00:05Z"
+      })
+  });
+
+  await page.goto("/");
+  await submitQuery(page, "aspirin");
+
+  const rows = page.getByTestId("paper-list").getByRole("listitem");
+  await expect(rows).toHaveCount(3, { timeout: 15_000 });
+
+  // 첫 논문 행의 별을 눌러 저장한다.
+  const firstRowStar = rows.first().getByTestId("star-toggle");
+  await firstRowStar.click();
+  // 저장 후 별이 눌린 상태(aria-pressed)가 된다.
+  await expect(firstRowStar).toHaveAttribute("aria-pressed", "true");
+
+  // 저장됨 진입점에 건수 배지(1)가 보인다.
+  const savedNav = page.getByTestId("saved-nav");
+  await expect(page.getByTestId("saved-nav-count")).toContainText("1");
+
+  // 저장됨 뷰로 전환하면 저장한 논문이 표시된다.
+  await savedNav.click();
+  const savedRows = page.getByTestId("saved-view").getByTestId("saved-row");
+  await expect(savedRows).toHaveCount(1);
+  await expect(savedRows.first()).toContainText("Aspirin and cardiovascular outcomes");
+
+  // 커스텀 제목과 메모를 편집하면(autosave) 새로고침 후에도 유지된다.
+  const titleInput = savedRows.first().getByTestId("saved-custom-title");
+  await titleInput.fill("내 즐겨찾기 제목");
+  const memoInput = savedRows.first().getByTestId("saved-memo");
+  await memoInput.fill("심혈관 관련 핵심 논문");
+
+  await page.reload();
+  // 새로고침 후 유휴 상태에서 저장됨 뷰로 다시 진입한다(저장은 localStorage에 영속).
+  await page.getByTestId("saved-nav").click();
+  const reloadedRow = page.getByTestId("saved-view").getByTestId("saved-row").first();
+  await expect(reloadedRow.getByTestId("saved-custom-title")).toHaveValue(
+    "내 즐겨찾기 제목"
+  );
+  await expect(reloadedRow.getByTestId("saved-memo")).toHaveValue("심혈관 관련 핵심 논문");
+  // 커스텀 제목이 표시 제목이 되고 원제목은 부제로 노출된다.
+  await expect(reloadedRow).toContainText("내 즐겨찾기 제목");
+  await expect(reloadedRow).toContainText("원제목: Aspirin and cardiovascular outcomes");
+
+  // 내보내기 메뉴에 BibTeX 옵션이 있다(저장 논문도 인용 포맷 지원).
+  await page.getByTestId("saved-export-trigger").click();
+  await expect(page.getByTestId("saved-export-bibtex")).toBeVisible();
+});
+
+test("Stage 3: 공유 가능한 ?q= URL이 로드 시 자동 검색을 실행한다", async ({
+  page
+}) => {
+  await mockApi(page, {
+    create: () => record({ status: "running" }),
+    get: () =>
+      record({
+        status: "done",
+        compound: COMPOUND,
+        papers: PAPERS,
+        patents: PATENTS,
+        patents_total_hits: PATENTS_TOTAL_HITS,
+        providers: PROVIDERS_OK,
+        completed_at: "2026-06-11T00:00:05Z"
+      })
+  });
+
+  // ?q=가 있는 URL로 직접 진입하면 히어로 없이 곧장 검색이 실행된다.
+  await page.goto("/?q=aspirin&tab=patents&sort=year");
+
+  // 특허 탭이 복원되어 특허 목록이 보인다(tab=patents).
+  const patentRows = page.getByTestId("patent-list").getByRole("listitem");
+  await expect(patentRows).toHaveCount(3, { timeout: 15_000 });
+  await expect(page.getByTestId("result-tab-patents")).toHaveAttribute(
+    "aria-selected",
+    "true"
+  );
+
+  // 입력창에 공유된 검색어가 채워져 있다.
+  await expect(page.getByPlaceholder(/물질명.*SMILES/)).toHaveValue("aspirin");
+});
+
 test("실패 흐름: failed 상태에서 오류 메시지와 다시 시도 버튼 표시", async ({ page }) => {
   await mockApi(page, {
     create: () =>

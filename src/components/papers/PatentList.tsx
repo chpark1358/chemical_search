@@ -15,6 +15,9 @@ interface PatentListProps {
   /** 행 다중 선택 체크 여부 판별과 토글. */
   isChecked: (patent: Patent) => boolean;
   onToggleCheck: (patent: Patent) => void;
+  /** 저장 여부 판별과 토글. */
+  isSaved: (patent: Patent) => boolean;
+  onToggleSave: (patent: Patent) => void;
 }
 
 export default function PatentList({
@@ -25,7 +28,9 @@ export default function PatentList({
   filtered = false,
   onResetFilters,
   isChecked,
-  onToggleCheck
+  onToggleCheck,
+  isSaved,
+  onToggleSave
 }: PatentListProps) {
   if (!patents.length) {
     // filtered=true인데 보이는 항목이 0이면 검색 결과가 아니라 필터가 다 숨긴 것이다.
@@ -84,7 +89,9 @@ export default function PatentList({
               checked={isChecked(patent)}
               onSelect={() => onSelect(index)}
               onToggleCheck={() => onToggleCheck(patent)}
+              onToggleSave={() => onToggleSave(patent)}
               patent={patent}
+              saved={isSaved(patent)}
               selected={index === selectedIndex}
             />
           </li>

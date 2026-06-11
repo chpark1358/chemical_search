@@ -1,10 +1,26 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import {
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from "react";
 
 import { isSafeUrl, type Paper, type Patent, type SortKey } from "@/lib/api";
 import { foldPapers, paperKey, patentKey, type FoldedPaper } from "@/lib/papers";
 import { parsePatentCountry, type PatentCountry } from "@/lib/patent";
+import {
+  addHistory,
+  clearHistory,
+  getHistorySnapshot,
+  getServerHistorySnapshot,
+  removeHistory,
+  subscribeHistory
+} from "@/lib/searchHistory";
 
 import CandidatePicker from "./CandidatePicker";
 import CompoundCard from "./CompoundCard";
@@ -18,13 +34,39 @@ import PatentToolbar, {
   type PatentSourceFilter
 } from "./PatentToolbar";
 import ProviderChips, { isProviderFailure, providerLabel } from "./ProviderChips";
+import RecentSearches from "./RecentSearches";
 import ResultTabs, { type ResultTab } from "./ResultTabs";
+import SavedNav from "./SavedNav";
+import SavedView from "./SavedView";
 import SearchBar from "./SearchBar";
 import SkeletonList, { LoadingBar } from "./SkeletonList";
 import StatusBanner from "./StatusBanner";
 import Toolbar, { type SourceFilter } from "./Toolbar";
 import { usePaperSearch, type SearchPhase } from "./usePaperSearch";
+import { useSavedItems } from "./useSavedItems";
 import { useSelection } from "./useSelection";
+
+/** URL 쿼리 파라미터를 안전하게 해석한다(없거나 잘못되면 기본값). */
+function parseTab(value: string | null): ResultTab {
+  return value === "patents" ? "patents" : "papers";
+}
+
+function parsePaperSort(value: string | null): SortKey {
+  return value === "citations" || value === "year" ? value : "relevance";
+}
+
+const PAPER_SOURCES: ReadonlyArray<SourceFilter> = [
+  "all",
+  "semantic_scholar",
+  "crossref",
+  "openalex"
+];
+
+function parseSource(value: string | null): SourceFilter {
+  return PAPER_SOURCES.includes(value as SourceFilter)
+    ? (value as SourceFilter)
+    : "all";
+}
 
 function sortPapers(papers: FoldedPaper[], sort: SortKey): FoldedPaper[] {
   const copy = [...papers];
@@ -91,16 +133,38 @@ function liveMessage(phase: SearchPhase, candidateCount: number, paperCount: num
 
 const PATENT_COUNTRY_ORDER: PatentCountry[] = ["US", "KR", "EP", "WO", "CN", "JP", "기타"];
 
-export default function PaperSearchApp() {
+function PaperSearchAppInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { phase, record, errorMessage, lastQuery, submit, chooseCandidate, retry } =
     usePaperSearch();
-  const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<SortKey>("relevance");
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
+  const saved = useSavedItems();
+
+  // 초기 URL 파라미터(?q=&tab=&sort=&src=). 첫 렌더에서 1회 읽어 상태 초기값으로 쓴다.
+  // 자동 검색 실행은 아래 effect에서 submit()으로 트리거한다(setState는 effect 밖에서).
+  const initialQuery = (searchParams.get("q") ?? "").trim();
+  const [query, setQuery] = useState(initialQuery);
+  const [sort, setSort] = useState<SortKey>(() =>
+    parsePaperSort(searchParams.get("sort"))
+  );
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>(() =>
+    parseSource(searchParams.get("src"))
+  );
   const [keyword, setKeyword] = useState("");
   const [fold, setFold] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState(-1);
-  const [activeTab, setActiveTab] = useState<ResultTab>("papers");
+  const [activeTab, setActiveTab] = useState<ResultTab>(() =>
+    parseTab(searchParams.get("tab"))
+  );
+  const [savedMode, setSavedMode] = useState(false);
+
+  // 최근 검색 기록. useSyncExternalStore로 localStorage를 SSR 안전하게 구독한다
+  // (서버 스냅샷은 빈 배열 → 하이드레이션 일관성 유지, 마운트 후 실제 기록으로 합쳐짐).
+  const history = useSyncExternalStore(
+    subscribeHistory,
+    getHistorySnapshot,
+    getServerHistorySnapshot
+  );
 
   // 특허 탭 전용 정렬/필터 상태.
   const [patentSort, setPatentSort] = useState<PatentSortKey>("relevance");
@@ -126,8 +190,56 @@ export default function PaperSearchApp() {
     if (!isIdle) searchInputRef.current?.focus();
   }, [isIdle]);
 
+  // 초기 로드: ?q=가 있으면 그 검색을 자동 실행한다(탭/정렬/출처는 위 초기값으로 복원됨).
+  // 마운트 1회만 실행한다(이후 사용자 조작이 URL을 덮어쓰므로 재실행 금지).
+  // 여기서는 setState가 아니라 외부 시스템(검색 파이프라인)을 트리거한다.
+  const didInitFromUrl = useRef(false);
+  useEffect(() => {
+    if (didInitFromUrl.current) return;
+    didInitFromUrl.current = true;
+    if (!initialQuery) return;
+    submit(initialQuery);
+    // submit은 안정 콜백이 아니지만, 마운트 1회 가드로 재실행을 막는다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const allPapers: Paper[] = useMemo(() => record?.papers ?? [], [record]);
   const allPatents: Patent[] = useMemo(() => record?.patents ?? [], [record]);
+
+  // 성공한 검색(done/partial)마다 한 번씩: 검색 기록 추가 + 공유 가능한 URL 반영.
+  // search_id는 휘발성이므로 URL에는 검색어(q)와 보기 상태(tab/sort/src)만 담는다.
+  const recordedSearchIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (phase !== "done" && phase !== "partial") return;
+    if (!record) return;
+    if (recordedSearchIdRef.current === record.search_id) return;
+    recordedSearchIdRef.current = record.search_id;
+    // addHistory가 localStorage를 갱신하면 subscribeHistory 구독으로 history가 자동 반영된다.
+    addHistory({
+      query: record.query,
+      compoundName: record.compound?.name ?? null,
+      inchiKey: record.compound?.inchi_key ?? null,
+      cid: record.compound?.cid ?? null,
+      paperCount: record.papers.length,
+      patentCount: record.patents.length
+    });
+  }, [phase, record]);
+
+  // 보기 상태(검색어/탭/정렬/출처)를 URL 쿼리에 반영한다(전체 내비게이션 없이).
+  // 결과가 있을 때만 동작하며, 저장됨 모드/유휴 상태에서는 건드리지 않는다.
+  useEffect(() => {
+    if (savedMode) return;
+    if (phase !== "done" && phase !== "partial") return;
+    if (!record) return;
+    const params = new URLSearchParams();
+    params.set("q", record.query);
+    params.set("tab", activeTab);
+    if (sort !== "relevance") params.set("sort", sort);
+    if (sourceFilter !== "all") params.set("src", sourceFilter);
+    const next = `?${params.toString()}`;
+    if (typeof window !== "undefined" && window.location.search === next) return;
+    router.replace(next, { scroll: false });
+  }, [phase, record, activeTab, sort, sourceFilter, savedMode, router]);
 
   // 파이프라인: 출처 필터 → 키워드 필터 → (중복 접기) → 정렬.
   // 접기는 sourceFilter/keyword 이후에 적용해야 "보이는 항목"끼리만 묶인다.
@@ -278,8 +390,31 @@ export default function PaperSearchApp() {
     setPatentCountryFilter("all");
     paperSelection.clear();
     patentSelection.clear();
+    setSavedMode(false);
     submit(value);
   }
+
+  // 최근 검색 칩 클릭 → 입력창 동기화 후 재검색.
+  function handlePickRecent(value: string) {
+    setQuery(value);
+    handleSubmit(value);
+  }
+
+  function handleRemoveRecent(value: string) {
+    removeHistory(value);
+  }
+
+  function handleClearRecent() {
+    clearHistory();
+  }
+
+  // 현재 결과로 확인된 InChIKey 집합("이미 검색함" 표식 기준).
+  const seenInchiKeys = useMemo(() => {
+    const set = new Set<string>();
+    const current = record?.compound?.inchi_key;
+    if (current) set.add(current);
+    return set;
+  }, [record]);
 
   // 탭 전환 시 키보드 선택을 초기화한다 (목록이 달라지므로). 다중 선택은 유지한다.
   function handleTabChange(next: ResultTab) {
@@ -351,6 +486,23 @@ export default function PaperSearchApp() {
     record?.papers.length ?? 0
   );
 
+  // 저장됨 모드: 검색 결과 영역을 라이브러리로 대체한다(활성 검색이 없어도 동작).
+  if (savedMode) {
+    return (
+      <div className="flex flex-col pb-16">
+        <div className="sticky top-14 z-10 -mx-6 flex items-center justify-between gap-3 border-b border-hairline bg-canvas/90 px-6 py-3 backdrop-blur">
+          <h2 className="text-sm font-semibold tracking-[-0.02em] text-ink">
+            저장됨 <span className="font-mono text-ink-subtle">{saved.count}</span>
+          </h2>
+          <SavedNav active count={saved.count} onToggle={() => setSavedMode(false)} />
+        </div>
+        <div className="pt-5">
+          <SavedView items={saved.items} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col pb-16">
       <p aria-live="polite" className="sr-only" role="status">
@@ -358,7 +510,7 @@ export default function PaperSearchApp() {
       </p>
 
       {isIdle ? (
-        <section className="flex flex-col items-center gap-8 px-4 pt-28">
+        <section className="flex flex-col items-center gap-8 px-4 pt-24">
           <EmptyState />
           <SearchBar
             busy={false}
@@ -368,21 +520,44 @@ export default function PaperSearchApp() {
             value={query}
             variant="hero"
           />
-          <p className="font-mono text-[11px] text-ink-tertiary">
-            / 또는 Ctrl+K 검색 포커스
-          </p>
+          <RecentSearches
+            entries={history}
+            onClear={handleClearRecent}
+            onPick={handlePickRecent}
+            onRemove={handleRemoveRecent}
+            seenInchiKeys={seenInchiKeys}
+          />
+          <div className="flex items-center gap-3">
+            <p className="font-mono text-[11px] text-ink-tertiary">
+              / 또는 Ctrl+K 검색 포커스
+            </p>
+            <SavedNav
+              active={false}
+              count={saved.count}
+              onToggle={() => setSavedMode(true)}
+            />
+          </div>
         </section>
       ) : (
         <>
           <div className="sticky top-14 z-10 -mx-6 border-b border-hairline bg-canvas/90 px-6 py-3 backdrop-blur">
-            <SearchBar
-              busy={isCreating}
-              inputRef={searchInputRef}
-              onChange={setQuery}
-              onSubmit={handleSubmit}
-              value={query}
-              variant="compact"
-            />
+            <div className="flex items-center gap-3">
+              <div className="min-w-0 flex-1">
+                <SearchBar
+                  busy={isCreating}
+                  inputRef={searchInputRef}
+                  onChange={setQuery}
+                  onSubmit={handleSubmit}
+                  value={query}
+                  variant="compact"
+                />
+              </div>
+              <SavedNav
+                active={false}
+                count={saved.count}
+                onToggle={() => setSavedMode(true)}
+              />
+            </div>
             {isLoading ? (
               <div className="absolute inset-x-0 bottom-0">
                 <LoadingBar />
@@ -459,9 +634,13 @@ export default function PaperSearchApp() {
                       filtered={allPapers.length > 0}
                       highlight={record.compound?.name ?? ""}
                       isChecked={(paper) => paperSelection.isSelected(paperKey(paper))}
+                      isSaved={(paper) => saved.isPaperSaved(paper)}
                       onResetFilters={handleResetPaperFilters}
                       onSelect={setSelectedIndex}
                       onToggleCheck={(paper) => paperSelection.toggle(paperKey(paper))}
+                      onToggleSave={(paper) =>
+                        saved.togglePaper(paper, record.compound?.name ?? null)
+                      }
                       papers={visiblePapers}
                       selectedIndex={selectedIndex}
                     />
@@ -494,10 +673,14 @@ export default function PaperSearchApp() {
                       isChecked={(patent) =>
                         patentSelection.isSelected(patentKey(patent))
                       }
+                      isSaved={(patent) => saved.isPatentSaved(patent)}
                       onResetFilters={handleResetPatentFilters}
                       onSelect={setSelectedIndex}
                       onToggleCheck={(patent) =>
                         patentSelection.toggle(patentKey(patent))
+                      }
+                      onToggleSave={(patent) =>
+                        saved.togglePatent(patent, record.compound?.name ?? null)
                       }
                       patents={visiblePatents}
                       selectedIndex={selectedIndex}
@@ -524,5 +707,23 @@ export default function PaperSearchApp() {
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Next 16에서 useSearchParams는 Suspense 경계 안에서만 쓸 수 있다(빌드 시 CSR bailout).
+ * 유휴 히어로와 동일한 레이아웃의 가벼운 폴백으로 감싼다.
+ */
+export default function PaperSearchApp() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex flex-col items-center gap-8 px-4 pt-24 pb-16">
+          <EmptyState />
+        </div>
+      }
+    >
+      <PaperSearchAppInner />
+    </Suspense>
   );
 }

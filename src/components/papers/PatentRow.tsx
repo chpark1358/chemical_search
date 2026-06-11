@@ -8,6 +8,7 @@ import { isSafeUrl, type Patent } from "@/lib/api";
 import CopyButton from "./CopyButton";
 import { providerLabel } from "./ProviderChips";
 import SelectCheckbox from "./SelectCheckbox";
+import StarButton from "./StarButton";
 
 interface PatentRowProps {
   patent: Patent;
@@ -16,6 +17,9 @@ interface PatentRowProps {
   /** 다중 선택 체크 상태와 토글 핸들러. */
   checked: boolean;
   onToggleCheck: () => void;
+  /** 저장(즐겨찾기) 상태와 토글 핸들러. */
+  saved: boolean;
+  onToggleSave: () => void;
 }
 
 /**
@@ -40,7 +44,9 @@ export default function PatentRow({
   selected,
   onSelect,
   checked,
-  onToggleCheck
+  onToggleCheck,
+  saved,
+  onToggleSave
 }: PatentRowProps) {
   const rowRef = useRef<HTMLElement>(null);
 
@@ -130,6 +136,12 @@ export default function PatentRow({
           ) : null}
         </p>
         </div>
+        <StarButton
+          className="ml-auto mt-0.5"
+          label={patent.title}
+          onToggle={onToggleSave}
+          saved={saved}
+        />
       </div>
     </article>
   );
