@@ -23,3 +23,4 @@ output/chemical-search/*
 !output/chemical-search/phase0_api_spike.json
 !output/chemical-search/phase0_api_spike.md
 *.tsbuildinfo
+.next-playwright/
