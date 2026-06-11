@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .http_client import HttpClient
+from .korean_aliases import lookup_korean_alias
 from .models import (
     CandidateResolution,
     CompoundCandidate,
@@ -54,6 +55,12 @@ HARD_ERROR_STATUSES = {"rate_limited", "timeout", "error"}
 
 KOREAN_RESOLVED_WARNING = (
     "한글 물질명 '{name}'을 Wikidata로 해석했습니다 (PubChem CID {cid})."
+)
+# Used when Wikidata misses but a curated Korean alias (korean_aliases.py)
+# resolves the name instead (e.g. 포르말린 -> formaldehyde).
+KOREAN_ALIAS_RESOLVED_WARNING = (
+    "한글 물질명 '{name}'을 내장 별칭 사전으로 '{target}'(으)로 해석했습니다 "
+    "(PubChem CID {cid})."
 )
 
 
@@ -133,18 +140,21 @@ class SearchPipeline:
         )
 
     def _resolve_korean(self, query: str, limit: int) -> CandidateResolution | None:
-        """Resolve a Hangul query via Wikidata then PubChem.
+        """Resolve a Hangul query via Wikidata, then a curated alias fallback.
 
         Returns a ``CandidateResolution`` when Wikidata yields a CID/InChIKey
-        that PubChem confirms, else ``None`` (caller falls through to the normal
-        PubChem name lookup). Failures never raise: Wikidata problems are
-        swallowed inside ``resolve_korean_name``.
+        that PubChem confirms; on a Wikidata miss, falls back to the curated
+        Korean-alias dictionary (korean_aliases.py) for common solution/brand
+        names Wikidata lacks (e.g. 포르말린, 포도당, 타이레놀). Returns ``None``
+        when neither path is confirmed by PubChem, so the caller falls through
+        to the normal PubChem name lookup. Failures never raise: Wikidata
+        problems are swallowed inside ``resolve_korean_name``.
         """
         if self.http is None:
             return None
         resolution = resolve_korean_name(query, self.http)
         if resolution is None:
-            return None
+            return self._resolve_korean_alias(query, limit)
 
         # Prefer the InChIKey path (a single confident PubChem candidate);
         # fall back to the CID path when only a CID is available.
@@ -168,6 +178,43 @@ class SearchPipeline:
             candidate.warnings.append(note)
         # Korean input is, by definition, a name; report it as such regardless
         # of how PubChem ultimately resolved it.
+        return CandidateResolution(
+            detected_type="name",
+            candidates=candidates,
+            diagnostics=diagnostics,
+        )
+
+    def _resolve_korean_alias(self, query: str, limit: int) -> CandidateResolution | None:
+        """Resolve a Hangul query via the curated alias dictionary.
+
+        Tried only after a Wikidata miss. Prefers the curated CID (one confident
+        PubChem record) and otherwise the curated English name. Returns ``None``
+        when the query is not in the dictionary or PubChem does not confirm the
+        target, so the caller falls through to the normal PubChem name lookup.
+        """
+        alias = lookup_korean_alias(query)
+        if alias is None:
+            return None
+
+        cid = alias.get("cid")
+        name = alias.get("name")
+        if isinstance(cid, int):
+            candidates, diagnostics = self.pubchem.resolve_by_cid(cid, limit)
+        elif isinstance(name, str):
+            candidates, diagnostics = self.pubchem.resolve_candidates(name, "name", limit)
+        else:  # pragma: no cover - every alias carries a name and/or cid
+            return None
+
+        if not candidates:
+            return None
+
+        note = KOREAN_ALIAS_RESOLVED_WARNING.format(
+            name=query.strip(),
+            target=name if isinstance(name, str) else (f"CID {cid}"),
+            cid=cid if isinstance(cid, int) else "-",
+        )
+        for candidate in candidates:
+            candidate.warnings.append(note)
         return CandidateResolution(
             detected_type="name",
             candidates=candidates,

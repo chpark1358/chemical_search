@@ -253,16 +253,19 @@ class KoreanResolutionIntegrationTests(unittest.TestCase):
         )
 
     def test_wikidata_miss_falls_through_to_pubchem_name_lookup(self):
-        # Wikidata returns nothing -> the normal PubChem name lookup runs with
-        # the original Korean query (which will usually be empty for Korean).
+        # Wikidata returns nothing AND the name is not in the curated alias
+        # dictionary -> the normal PubChem name lookup runs with the original
+        # Korean query (which will usually be empty for Korean). 가상물질 is a
+        # made-up Korean string, so neither Wikidata nor the alias map matches.
         pubchem = FakePubChem(name_candidates=[])
         http = FakeHttp([EMPTY_SPARQL_FIXTURE])
         pipeline = make_pipeline(pubchem, http)
 
-        resolution = pipeline.resolve_candidates("타이레놀", "auto", 20)
+        resolution = pipeline.resolve_candidates("가상물질", "auto", 20)
 
         self.assertEqual(resolution.candidates, [])
-        self.assertEqual(pubchem.resolve_calls, [("타이레놀", "name")])
+        self.assertEqual(pubchem.resolve_calls, [("가상물질", "name")])
+        self.assertEqual(pubchem.cid_calls, [])
 
     def test_non_korean_input_never_calls_wikidata(self):
         pubchem = FakePubChem(name_candidates=[candidate(2244)])

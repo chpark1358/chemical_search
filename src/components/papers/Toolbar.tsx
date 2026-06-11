@@ -1,17 +1,11 @@
 "use client";
 
-import type { Paper, SortKey } from "@/lib/api";
+import type { Paper, PaperSourceName, SortKey } from "@/lib/api";
 
 import ExportMenu from "./ExportMenu";
+import { providerLabel } from "./ProviderChips";
 
-export type SourceFilter = "all" | "semantic_scholar" | "crossref" | "openalex";
-
-const FILTERS: ReadonlyArray<{ id: SourceFilter; label: string }> = [
-  { id: "all", label: "전체" },
-  { id: "semantic_scholar", label: "Semantic Scholar" },
-  { id: "crossref", label: "Crossref" },
-  { id: "openalex", label: "OpenAlex" }
-];
+export type SourceFilter = "all" | PaperSourceName;
 
 interface ToolbarProps {
   /** 화면에 보이는 논문 건수(접기·필터 적용 후). */
@@ -22,6 +16,8 @@ interface ToolbarProps {
   sourceFilter: SourceFilter;
   keyword: string;
   searchId: string;
+  /** 결과에 실제로 존재하는 출처(칩 노출 여부·순서 결정). */
+  availableSources: PaperSourceName[];
   /** 중복 접기 켜짐 여부. */
   fold: boolean;
   /** 다중 선택 상태. */
@@ -45,6 +41,7 @@ export default function Toolbar({
   sourceFilter,
   keyword,
   searchId,
+  availableSources,
   fold,
   selectedCount,
   allSelected,
@@ -75,23 +72,24 @@ export default function Toolbar({
             </span>
           ) : null}
         </p>
-        <div aria-label="출처 필터" className="flex items-center gap-1.5" role="group">
-          {FILTERS.map((filter) => (
-            <button
-              aria-pressed={sourceFilter === filter.id}
-              className={`rounded-md border px-2.5 py-1 text-xs transition-colors duration-150 ${
-                sourceFilter === filter.id
-                  ? "border-primary bg-surface-2 text-ink"
-                  : "border-hairline bg-surface-1 text-ink-subtle hover:border-hairline-strong hover:text-ink-muted"
-              }`}
-              key={filter.id}
-              onClick={() => onSourceFilterChange(filter.id)}
-              type="button"
-            >
-              {filter.label}
-            </button>
-          ))}
-        </div>
+        {/* 출처 필터: 결과에 존재하는 출처가 2개 이상일 때만 의미가 있다(특허 툴바와 동일). */}
+        {availableSources.length > 1 ? (
+          <div aria-label="출처 필터" className="flex items-center gap-1.5" role="group">
+            <SourceChip
+              active={sourceFilter === "all"}
+              label="전체"
+              onClick={() => onSourceFilterChange("all")}
+            />
+            {availableSources.map((source) => (
+              <SourceChip
+                active={sourceFilter === source}
+                key={source}
+                label={providerLabel(source)}
+                onClick={() => onSourceFilterChange(source)}
+              />
+            ))}
+          </div>
+        ) : null}
         <label className="flex items-center gap-1.5 text-xs text-ink-subtle">
           <input
             checked={fold}
@@ -139,6 +137,31 @@ export default function Toolbar({
         />
       </div>
     </div>
+  );
+}
+
+function SourceChip({
+  active,
+  label,
+  onClick
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      aria-pressed={active}
+      className={`rounded-md border px-2.5 py-1 text-xs transition-colors duration-150 ${
+        active
+          ? "border-primary bg-surface-2 text-ink"
+          : "border-hairline bg-surface-1 text-ink-subtle hover:border-hairline-strong hover:text-ink-muted"
+      }`}
+      onClick={onClick}
+      type="button"
+    >
+      {label}
+    </button>
   );
 }
 

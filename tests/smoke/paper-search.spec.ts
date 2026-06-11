@@ -139,6 +139,29 @@ const PAPERS: Json[] = [
   }
 ];
 
+// S2가 게이팅돼 결과에 없는 경우(openalex + crossref만): 논문 출처 필터 칩 검증용.
+const PAPERS_NO_S2: Json[] = [PAPERS[1], PAPERS[2]];
+
+const PROVIDERS_NO_S2: Json[] = [
+  PUBCHEM_PROVIDER,
+  {
+    name: "crossref",
+    status: "ok",
+    latency_ms: 410,
+    cached: true,
+    retry_count: 0,
+    message: null
+  },
+  {
+    name: "openalex",
+    status: "ok",
+    latency_ms: 500,
+    cached: false,
+    retry_count: 0,
+    message: null
+  }
+];
+
 const CANDIDATES: Json[] = [
   {
     candidate_id: "c1",
@@ -340,6 +363,50 @@ test("직접 흐름: 검색 → running → done, 정렬 토글 동작", async (
   // 가나다순(ko locale)에서는 한글 출원인이 라틴 문자보다 앞선다.
   // "한국제약 주식회사" → "Example Pharma Co" → (출원인 없는 행은 뒤로).
   await expect(patentRows.first()).toContainText("한국제약 주식회사");
+});
+
+test("논문 출처 필터: 결과에 존재하는 출처만 동적으로 노출(S2 게이팅 시 사라짐)", async ({
+  page
+}) => {
+  await mockApi(page, {
+    create: () => record({ status: "running" }),
+    get: () =>
+      record({
+        status: "done",
+        compound: COMPOUND,
+        // openalex + crossref만 결과에 포함되고 semantic_scholar는 없다(게이팅됨).
+        papers: PAPERS_NO_S2,
+        providers: PROVIDERS_NO_S2,
+        completed_at: "2026-06-11T00:00:05Z"
+      })
+  });
+
+  await page.goto("/");
+  await submitQuery(page, "aspirin");
+
+  const rows = page.getByTestId("paper-list").getByRole("listitem");
+  await expect(rows).toHaveCount(2, { timeout: 15_000 });
+
+  // 출처 필터 그룹에는 전체/OpenAlex/Crossref만 있고 Semantic Scholar 칩은 없다.
+  const sourceFilter = page.getByRole("group", { name: "출처 필터" });
+  await expect(sourceFilter).toBeVisible();
+  await expect(
+    sourceFilter.getByRole("button", { name: "전체", exact: true })
+  ).toBeVisible();
+  await expect(
+    sourceFilter.getByRole("button", { name: "OpenAlex", exact: true })
+  ).toBeVisible();
+  await expect(
+    sourceFilter.getByRole("button", { name: "Crossref", exact: true })
+  ).toBeVisible();
+  await expect(
+    sourceFilter.getByRole("button", { name: "Semantic Scholar", exact: true })
+  ).toHaveCount(0);
+
+  // 동적 칩도 정상 동작한다: OpenAlex로 거르면 openalex 논문만 남는다.
+  await sourceFilter.getByRole("button", { name: "OpenAlex", exact: true }).click();
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText("Acetylsalicylic acid pharmacokinetics");
 });
 
 test("Stage 2: 중복 접기 토글, 다중 선택, BibTeX 내보내기 옵션", async ({ page }) => {

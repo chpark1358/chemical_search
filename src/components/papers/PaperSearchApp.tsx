@@ -10,7 +10,13 @@ import {
   useSyncExternalStore
 } from "react";
 
-import { isSafeUrl, type Paper, type Patent, type SortKey } from "@/lib/api";
+import {
+  isSafeUrl,
+  type Paper,
+  type PaperSourceName,
+  type Patent,
+  type SortKey
+} from "@/lib/api";
 import { foldPapers, paperKey, patentKey, type FoldedPaper } from "@/lib/papers";
 import { parsePatentCountry, type PatentCountry } from "@/lib/patent";
 import {
@@ -60,6 +66,13 @@ const PAPER_SOURCES: ReadonlyArray<SourceFilter> = [
   "semantic_scholar",
   "crossref",
   "openalex"
+];
+
+/** 논문 출처 칩의 안정 순서. 결과에 존재하는 것만 이 순서대로 노출한다. */
+const PAPER_SOURCE_ORDER: PaperSourceName[] = [
+  "semantic_scholar",
+  "openalex",
+  "crossref"
 ];
 
 function parseSource(value: string | null): SourceFilter {
@@ -206,6 +219,20 @@ function PaperSearchAppInner() {
   const allPapers: Paper[] = useMemo(() => record?.papers ?? [], [record]);
   const allPatents: Patent[] = useMemo(() => record?.patents ?? [], [record]);
 
+  // 결과에 실제로 존재하는 논문 출처(필터 칩 노출·순서 결정).
+  // S2가 게이팅돼 결과에 없으면 칩도 자동으로 사라진다.
+  const availablePaperSources = useMemo(() => {
+    const present = new Set(allPapers.map((paper) => paper.source));
+    return PAPER_SOURCE_ORDER.filter((source) => present.has(source));
+  }, [allPapers]);
+
+  // 활성 출처 필터가 더 이상 결과에 없는 출처를 가리키면 '전체'로 간주한다(렌더 중 파생).
+  // setState 이펙트 대신 파생값을 써서 cascading render를 피한다.
+  const effectiveSourceFilter: SourceFilter =
+    sourceFilter !== "all" && !availablePaperSources.includes(sourceFilter)
+      ? "all"
+      : sourceFilter;
+
   // 성공한 검색(done/partial)마다 한 번씩: 검색 기록 추가 + 공유 가능한 URL 반영.
   // search_id는 휘발성이므로 URL에는 검색어(q)와 보기 상태(tab/sort/src)만 담는다.
   const recordedSearchIdRef = useRef<string | null>(null);
@@ -235,19 +262,19 @@ function PaperSearchAppInner() {
     params.set("q", record.query);
     params.set("tab", activeTab);
     if (sort !== "relevance") params.set("sort", sort);
-    if (sourceFilter !== "all") params.set("src", sourceFilter);
+    if (effectiveSourceFilter !== "all") params.set("src", effectiveSourceFilter);
     const next = `?${params.toString()}`;
     if (typeof window !== "undefined" && window.location.search === next) return;
     router.replace(next, { scroll: false });
-  }, [phase, record, activeTab, sort, sourceFilter, savedMode, router]);
+  }, [phase, record, activeTab, sort, effectiveSourceFilter, savedMode, router]);
 
   // 파이프라인: 출처 필터 → 키워드 필터 → (중복 접기) → 정렬.
   // 접기는 sourceFilter/keyword 이후에 적용해야 "보이는 항목"끼리만 묶인다.
   const visiblePapers = useMemo<FoldedPaper[]>(() => {
     const bySource =
-      sourceFilter === "all"
+      effectiveSourceFilter === "all"
         ? allPapers
-        : allPapers.filter((paper) => paper.source === sourceFilter);
+        : allPapers.filter((paper) => paper.source === effectiveSourceFilter);
     const byKeyword = bySource.filter((paper) =>
       matchesKeyword([paper.title, paper.authors.join(" "), paper.venue], keyword)
     );
@@ -255,18 +282,18 @@ function PaperSearchAppInner() {
       ? foldPapers(byKeyword)
       : byKeyword.map((paper) => ({ ...paper, sources: [paper.source] }));
     return sortPapers(folded, sort);
-  }, [allPapers, sort, sourceFilter, keyword, fold]);
+  }, [allPapers, sort, effectiveSourceFilter, keyword, fold]);
 
   // 접기 적용 전(필터만 적용) 수집 건수 — "수집 M건" 표기에 쓴다.
   const collectedPaperCount = useMemo(() => {
     const bySource =
-      sourceFilter === "all"
+      effectiveSourceFilter === "all"
         ? allPapers
-        : allPapers.filter((paper) => paper.source === sourceFilter);
+        : allPapers.filter((paper) => paper.source === effectiveSourceFilter);
     return bySource.filter((paper) =>
       matchesKeyword([paper.title, paper.authors.join(" "), paper.venue], keyword)
     ).length;
-  }, [allPapers, sourceFilter, keyword]);
+  }, [allPapers, effectiveSourceFilter, keyword]);
 
   // 결과에 실제로 존재하는 특허 출처/국가(필터 칩 노출 결정).
   const availablePatentSources = useMemo(() => {
@@ -613,6 +640,7 @@ function PaperSearchAppInner() {
                   <>
                     <Toolbar
                       allSelected={paperSelection.allSelected(visiblePaperKeys)}
+                      availableSources={availablePaperSources}
                       count={visiblePapers.length}
                       fold={fold}
                       keyword={keyword}
@@ -626,7 +654,7 @@ function PaperSearchAppInner() {
                       selectedCount={paperSelection.count}
                       selectedPapers={selectedPapers}
                       sort={sort}
-                      sourceFilter={sourceFilter}
+                      sourceFilter={effectiveSourceFilter}
                       total={collectedPaperCount}
                       visiblePapers={visiblePapers}
                     />
