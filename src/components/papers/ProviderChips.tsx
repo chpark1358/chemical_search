@@ -1,16 +1,20 @@
 import { AlertTriangle, Check, Minus } from "lucide-react";
 
-import type { Paper, ProviderResult, ProviderStatus } from "@/lib/api";
+import type { Paper, Patent, ProviderResult, ProviderStatus } from "@/lib/api";
 
 export const PROVIDER_LABELS: Record<string, string> = {
   semantic_scholar: "Semantic Scholar",
   crossref: "Crossref",
   openalex: "OpenAlex",
+  surechembl: "SureChEMBL",
   pubchem: "PubChem 해석"
 };
 
-/** 논문 출처 프로바이더. 그 외(예: pubchem)는 화합물 해석 진단 항목이다. */
+/** 논문 출처 프로바이더. */
 const PAPER_SOURCES = new Set<string>(["semantic_scholar", "crossref", "openalex"]);
+
+/** 특허 출처 프로바이더. 그 외(예: pubchem)는 화합물 해석 진단 항목이다. */
+const PATENT_SOURCES = new Set<string>(["surechembl"]);
 
 const STATUS_LABELS: Record<ProviderStatus, string> = {
   ok: "정상",
@@ -51,22 +55,30 @@ function diagnostics(provider: ProviderResult): string {
 interface ProviderChipsProps {
   providers: ProviderResult[];
   papers: Paper[];
+  patents: Patent[];
 }
 
-export default function ProviderChips({ providers, papers }: ProviderChipsProps) {
+export default function ProviderChips({
+  providers,
+  papers,
+  patents
+}: ProviderChipsProps) {
   if (!providers.length) return null;
 
   return (
     <div className="flex flex-wrap items-center gap-2">
       {providers.map((provider) => {
         const isPaperSource = PAPER_SOURCES.has(provider.name);
-        const count = papers.filter((paper) => paper.source === provider.name).length;
+        const isPatentSource = PATENT_SOURCES.has(provider.name);
+        // 논문/특허 출처는 각자의 결과 건수를, 진단 항목(PubChem 해석)은 상태만 보여준다.
+        const count = isPatentSource
+          ? patents.filter((patent) => patent.source === provider.name).length
+          : papers.filter((paper) => paper.source === provider.name).length;
         const detail = diagnostics(provider);
-        // 진단 항목(PubChem 해석)은 논문 건수가 아니라 상태만 보여준다.
         const statusText =
           provider.status !== "ok"
             ? STATUS_LABELS[provider.status]
-            : isPaperSource
+            : isPaperSource || isPatentSource
               ? `${count}건`
               : "완료";
         return (

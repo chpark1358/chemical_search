@@ -35,7 +35,9 @@ from .rendering import render_csv, render_json, render_markdown
 
 logger = logging.getLogger(__name__)
 
-PaperSource = Literal["semantic_scholar", "crossref", "openalex"]
+# "surechembl" is a PATENT source; the other three are paper sources. The
+# default (omitted/null) runs all of them.
+SearchSource = Literal["semantic_scholar", "crossref", "openalex", "surechembl"]
 InputType = Literal["auto", "name", "smiles", "inchi", "inchi_key", "formula"]
 SortOrder = Literal["relevance", "citations", "year"]
 
@@ -77,7 +79,7 @@ class NormalizeRequest(BaseModel):
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     input_type: InputType = "auto"
-    sources: list[PaperSource] | None = None
+    sources: list[SearchSource] | None = None
     limit: int = Field(default=20, ge=1, le=50)
     sort: SortOrder = "relevance"
 
@@ -332,6 +334,19 @@ def _serialize_record(record: SearchRecord) -> dict[str, Any]:
             }
             for paper in (report.papers if report else [])
         ],
+        "patents": [
+            {
+                "id": patent.id,
+                "publication_number": patent.publication_number,
+                "title": patent.title,
+                "url": patent.url,
+                "assignee": patent.assignee,
+                "date": patent.date,
+                "source": patent.source,
+            }
+            for patent in (report.patents if report else [])
+        ],
+        "patents_total_hits": report.patents_total_hits if report else None,
         "providers": [
             {
                 "name": provider.name,

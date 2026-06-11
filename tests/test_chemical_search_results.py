@@ -8,8 +8,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from chemical_search.models import UNTITLED_PAPER, PaperItem
-from chemical_search.results import merge_papers
+from chemical_search.models import UNTITLED_PAPER, PaperItem, PatentItem
+from chemical_search.results import dedup_patents, merge_papers
 
 
 def paper(
@@ -254,6 +254,42 @@ class MergeTests(unittest.TestCase):
     def test_unknown_sort_raises(self):
         with self.assertRaises(ValueError):
             merge_papers([[paper("semantic_scholar")]], sort="alphabetical")
+
+
+def patent(publication_number: str, title: str = "Patent") -> PatentItem:
+    return PatentItem(
+        id=publication_number,
+        publication_number=publication_number,
+        title=title,
+        url=f"https://patents.google.com/patent/{publication_number}/en",
+        source="surechembl",
+    )
+
+
+class DedupPatentsTests(unittest.TestCase):
+    def test_duplicate_publication_numbers_are_dropped_first_seen_kept(self):
+        unique = dedup_patents(
+            [
+                patent("CN102369480A", title="First"),
+                patent("CN102369480A", title="Duplicate"),
+                patent("US1234567B2", title="Second"),
+            ]
+        )
+
+        self.assertEqual([item.title for item in unique], ["First", "Second"])
+
+    def test_patents_without_publication_number_are_all_kept(self):
+        unique = dedup_patents(
+            [
+                patent("", title="No number A"),
+                patent("", title="No number B"),
+            ]
+        )
+
+        self.assertEqual(len(unique), 2)
+
+    def test_empty_list_returns_empty(self):
+        self.assertEqual(dedup_patents([]), [])
 
 
 if __name__ == "__main__":

@@ -1,5 +1,42 @@
 # 개발 진행 로그
 
+## 2026-06-11: SureChEMBL 특허 프로바이더 추가(논문/특허 분리)
+
+상태: 진행 중
+
+### 목적
+
+사용자 요구에 따라 특허 검색을 SureChEMBL로 재도입하고, 논문과 분리된 별도 결과 유형으로 표시한다.
+
+### 진행 내용
+
+- SureChEMBL 라이브 재검증(2026-06-11): `https://www.surechembl.org/api` HTTPS 정상, `/api/v3/api-docs` OpenAPI 문서화, API key 불필요, 화합물→특허 매핑 + 특허별 Google Patents 딥링크 확인
+- 특허 검색 재도입 결정 기록 (D-014): SureChEMBL provider 추가, EPO OPS/ChEMBL 구조검색은 계속 제외, D-009/D-010 부분 갱신
+- 새 source `surechembl`(특허 소스) 정의: `sources` 미지정 시 기본값은 논문 3소스 + `surechembl` 전체, 빈 배열은 422 유지
+- `SearchRecord` 계약 확장 결정: `patents[]`({id, publication_number, title, url, assignee, date, source:"surechembl"})와 `patents_total_hits`(미검색 시 null) 추가, `providers[]`에 `surechembl` 진단 추가
+- 검색 상태(done/partial/failed) 판정을 논문·특허 두 결과 유형을 모두 포괄하도록 갱신
+- O-002를 '해결/재개'로 갱신(TLS 정상 재검증, 새 API 사용), O-003(EPO OPS)는 범위 제외 유지
+- `README.md`와 진행 문서를 논문 3소스 + 특허(SureChEMBL) 기준으로 갱신
+
+### 변경 파일
+
+- `README.md`
+- `docs/chemical-search-progress/current-status.md`
+- `docs/chemical-search-progress/decision-log.md`
+- `docs/chemical-search-progress/open-issues.md`
+- `docs/chemical-search-progress/progress-log.md`
+- `docs/chemical-structure-patent-literature-search-plan.md`
+
+### 검증
+
+- 문서 정비 작업으로 코드 검증 없음. SureChEMBL provider/pipeline/계약/UI 구현의 lint/테스트 결과는 해당 작업 종료 시 기록한다.
+
+### 다음 작업
+
+1. `scripts/chemical_search` SureChEMBL provider 구현(SMILES→chemical_id resolve, name fallback, documents 조회, 상태 분류 ok/empty/rate_limited/timeout/error)
+2. `api.py` 직렬화에 `patents[]`/`patents_total_hits` 추가, `src/lib/api.ts` 계약 반영
+3. UI 논문/특허 결과 탭 분리와 "상위 N건 / 전체 N건" 표시
+
 ## 2026-06-11: OpenAlex 논문 프로바이더 추가
 
 상태: 진행 중

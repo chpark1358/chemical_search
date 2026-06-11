@@ -10,6 +10,10 @@ from typing import Any
 # Shared here so results.py can exclude it from title-based deduplication.
 UNTITLED_PAPER = "(제목 없음)"
 
+# Placeholder title injected by the patent provider when a document carries no
+# title; reuses the same shared constant string as papers.
+UNTITLED_PATENT = UNTITLED_PAPER
+
 
 @dataclass
 class NormalizedCompound:
@@ -69,6 +73,19 @@ class PaperItem:
     abstract: str | None = None
     source: str = "semantic_scholar"
     score: float = 0.0
+
+
+@dataclass
+class PatentItem:
+    """A single patent document from SureChEMBL."""
+
+    id: str
+    publication_number: str
+    title: str
+    url: str | None = None
+    assignee: str | None = None
+    date: str | None = None
+    source: str = "surechembl"
 
 
 @dataclass
@@ -135,6 +152,8 @@ class SearchReport:
     status: str
     compound: CompoundInfo | None
     papers: list[PaperItem] = field(default_factory=list)
+    patents: list[PatentItem] = field(default_factory=list)
+    patents_total_hits: int | None = None
     providers: list[ProviderDiagnostics] = field(default_factory=list)
     error: str | None = None
 

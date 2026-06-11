@@ -8,13 +8,25 @@ from typing import Any
 from urllib.parse import quote
 
 from .http_client import HttpClient, ProviderHttpError
-from .models import UNTITLED_PAPER, CompoundCandidate, PaperItem, ProviderDiagnostics
+from .models import (
+    UNTITLED_PAPER,
+    UNTITLED_PATENT,
+    CompoundCandidate,
+    HttpDiagnostics,
+    PaperItem,
+    PatentItem,
+    ProviderDiagnostics,
+)
 
 
 PUBCHEM_CACHE_TTL = 7 * 24 * 60 * 60
 SEMANTIC_SCHOLAR_CACHE_TTL = 3 * 24 * 60 * 60
 CROSSREF_CACHE_TTL = 7 * 24 * 60 * 60
 OPENALEX_CACHE_TTL = 3 * 24 * 60 * 60
+SURECHEMBL_CACHE_TTL = 7 * 24 * 60 * 60
+
+# SureChEMBL encodes a JSON null as the literal string "null"; treat it as None.
+_SURECHEMBL_NULL = "null"
 
 # Reconstructed OpenAlex abstracts are capped to keep payloads bounded.
 OPENALEX_ABSTRACT_MAX_CHARS = 2500
@@ -319,3 +331,187 @@ class CrossrefProvider:
         if not value:
             return None
         return _TAG_RE.sub("", value).strip() or None
+
+
+class SureChemblProvider:
+    """SureChEMBL patent search.
+
+    Two-call flow: resolve the SureChEMBL ``chemical_id`` from the already
+    resolved compound (SMILES lookup, with a name fallback), then fetch the
+    patent documents associated with that chemical id. SureChEMBL is free and
+    needs no API key.
+    """
+
+    name = "surechembl"
+    base_url = "https://www.surechembl.org/api"
+
+    def __init__(self, http: HttpClient):
+        self.http = http
+
+    def search_patents(
+        self,
+        *,
+        smiles: str | None,
+        compound_name: str | None,
+        inchi_key: str | None,
+        limit: int,
+    ) -> tuple[list[PatentItem], int | None, ProviderDiagnostics]:
+        """Resolve the chemical id then fetch its patents.
+
+        Returns ``(patents, total_hits, diagnostics)``. When the compound
+        cannot be resolved on SureChEMBL the status is "empty" (no patents
+        found is not an error).
+        """
+        try:
+            chemical_id, resolve_http = self._resolve_chemical_id(
+                smiles=smiles,
+                compound_name=compound_name,
+                inchi_key=inchi_key,
+            )
+            if chemical_id is None:
+                return [], None, ProviderDiagnostics.from_http(self.name, "empty", resolve_http)
+
+            url = (
+                f"{self.base_url}/search/documents_for_structures"
+                f"?chemicalIds={quote(str(chemical_id), safe='')}"
+                f"&page=1&itemsPerPage={limit}"
+            )
+            data, http = self.http.post_json(
+                url,
+                headers={"Content-Type": "application/json"},
+                cache_ttl_seconds=SURECHEMBL_CACHE_TTL,
+                retries=1,
+            )
+            results = (data.get("data") or {}).get("results") or {}
+            documents = results.get("documents") or []
+            patents = [self._patent(doc) for doc in documents]
+            total_hits = self._int(results.get("total_hits"))
+            status = "ok" if patents else "empty"
+            return patents, total_hits, ProviderDiagnostics.from_http(self.name, status, http)
+        except ProviderHttpError as exc:
+            return [], None, _error_diagnostics(self.name, exc)
+
+    def _resolve_chemical_id(
+        self,
+        *,
+        smiles: str | None,
+        compound_name: str | None,
+        inchi_key: str | None,
+    ) -> tuple[str | None, HttpDiagnostics]:
+        last_http: HttpDiagnostics | None = None
+        if smiles:
+            url = f"{self.base_url}/chemical/smiles/?smiles={quote(smiles, safe='')}"
+            data, last_http = self.http.post_json(
+                url,
+                headers={"Content-Type": "application/json"},
+                cache_ttl_seconds=SURECHEMBL_CACHE_TTL,
+                retries=1,
+            )
+            chemical_id = self._chemical_id_from_smiles(data.get("data"))
+            if chemical_id is not None:
+                return chemical_id, last_http
+
+        if compound_name:
+            url = f"{self.base_url}/chemical/name/{quote(compound_name, safe='')}"
+            data, last_http = self.http.get_json(
+                url,
+                cache_ttl_seconds=SURECHEMBL_CACHE_TTL,
+                retries=1,
+            )
+            chemical_id = self._chemical_id_from_name(data.get("data"), inchi_key)
+            if chemical_id is not None:
+                return chemical_id, last_http
+
+        if last_http is None:
+            last_http = HttpDiagnostics(latency_ms=0, cached=False, retry_count=0)
+        return None, last_http
+
+    @staticmethod
+    def _chemical_id_from_smiles(data: Any) -> str | None:
+        """The SMILES lookup returns a dict keyed by the input SMILES; take the
+        first value's chemical_id."""
+        if not isinstance(data, dict):
+            return None
+        for value in data.values():
+            if isinstance(value, dict):
+                chemical_id = value.get("chemical_id") or value.get("id")
+                if chemical_id:
+                    return str(chemical_id)
+        return None
+
+    @staticmethod
+    def _chemical_id_from_name(data: Any, inchi_key: str | None) -> str | None:
+        """The name lookup returns a list. Prefer an inchi_key match, then the
+        highest global_frequency, then the first entry."""
+        if not isinstance(data, list):
+            return None
+        entries = [item for item in data if isinstance(item, dict) and item.get("chemical_id")]
+        if not entries:
+            return None
+        if inchi_key:
+            target = inchi_key.casefold()
+            for item in entries:
+                value = item.get("inchi_key")
+                if isinstance(value, str) and value.casefold() == target:
+                    return str(item["chemical_id"])
+        best = max(entries, key=lambda item: SureChemblProvider._int(item.get("global_frequency")) or 0)
+        return str(best["chemical_id"])
+
+    def _patent(self, doc: dict[str, Any]) -> PatentItem:
+        doc_id = str(doc.get("docId") or "")
+        publication_number = doc_id.replace("-", "")
+        metadata = doc.get("metadata") or {}
+        url = (
+            f"https://patents.google.com/patent/{publication_number}/en"
+            if publication_number
+            else None
+        )
+        return PatentItem(
+            id=doc_id or publication_number or UNTITLED_PATENT,
+            publication_number=publication_number,
+            title=self._title(metadata.get("titles")),
+            url=url,
+            assignee=self._clean(doc.get("pa")),
+            date=self._clean(metadata.get("pd")),
+            source=self.name,
+        )
+
+    @staticmethod
+    def _title(titles: Any) -> str:
+        """metadata.titles is a list of {lang, titles:[...]}. Prefer English,
+        else the first available title; fall back to the shared placeholder."""
+        if not isinstance(titles, list):
+            return UNTITLED_PATENT
+        first_available: str | None = None
+        for entry in titles:
+            if not isinstance(entry, dict):
+                continue
+            values = entry.get("titles") or []
+            text = values[0] if values and values[0] else None
+            if not text:
+                continue
+            if entry.get("lang") == "en":
+                return str(text)
+            if first_available is None:
+                first_available = str(text)
+        return first_available or UNTITLED_PATENT
+
+    @staticmethod
+    def _clean(value: Any) -> str | None:
+        """SureChEMBL encodes missing values as the literal string "null"."""
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text or text == _SURECHEMBL_NULL:
+            return None
+        return text
+
+    @staticmethod
+    def _int(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+            return int(value)
+        return None

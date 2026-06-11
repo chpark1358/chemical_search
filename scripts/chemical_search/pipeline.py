@@ -17,20 +17,29 @@ from .models import (
     CompoundCandidate,
     CompoundInfo,
     PaperItem,
+    PatentItem,
     ProviderDiagnostics,
     SearchReport,
 )
 from .normalize import detect_input_type, normalize_structure
-from .providers import CrossrefProvider, OpenAlexProvider, PubChemProvider, SemanticScholarProvider
-from .results import merge_papers
+from .providers import (
+    CrossrefProvider,
+    OpenAlexProvider,
+    PubChemProvider,
+    SemanticScholarProvider,
+    SureChemblProvider,
+)
+from .results import dedup_patents, merge_papers
 
 
 logger = logging.getLogger(__name__)
 
 PAPER_SOURCES = ("semantic_scholar", "openalex", "crossref")
+PATENT_SOURCES = ("surechembl",)
+ALL_SOURCES = (*PAPER_SOURCES, *PATENT_SOURCES)
 HARD_ERROR_STATUSES = {"rate_limited", "timeout", "error"}
 
-ALL_PROVIDERS_FAILED_ERROR = "논문 검색 제공자에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요."
+ALL_PROVIDERS_FAILED_ERROR = "논문 및 특허 검색 제공자에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요."
 PROVIDER_CALL_ERROR = "제공자 호출 중 오류가 발생했습니다."
 
 
@@ -42,16 +51,24 @@ class SearchPipeline:
         semantic_scholar: SemanticScholarProvider | None = None,
         openalex: OpenAlexProvider | None = None,
         crossref: CrossrefProvider | None = None,
+        surechembl: SureChemblProvider | None = None,
         cache_dir: Path | None = None,
         cache_enabled: bool = True,
     ):
         http: HttpClient | None = None
-        if pubchem is None or semantic_scholar is None or openalex is None or crossref is None:
+        if (
+            pubchem is None
+            or semantic_scholar is None
+            or openalex is None
+            or crossref is None
+            or surechembl is None
+        ):
             http = HttpClient(timeout_seconds=10, cache_dir=cache_dir, cache_enabled=cache_enabled)
         self.pubchem = pubchem or PubChemProvider(http)
         self.semantic_scholar = semantic_scholar or SemanticScholarProvider(http)
         self.openalex = openalex or OpenAlexProvider(http)
         self.crossref = crossref or CrossrefProvider(http)
+        self.surechembl = surechembl or SureChemblProvider(http)
 
     def resolve_candidates(
         self,
@@ -78,9 +95,11 @@ class SearchPipeline:
         sort: str = "relevance",
         extra_providers: Sequence[ProviderDiagnostics] | None = None,
     ) -> SearchReport:
-        """Run the paper search for an already-selected candidate object.
+        """Run the paper and patent search for an already-selected candidate.
 
         The candidate is used directly; candidates are never re-fetched here.
+        Papers come from Semantic Scholar / OpenAlex / Crossref and patents
+        from SureChEMBL; the two result types are reported separately.
         """
         selected_sources = self._validate_sources(sources)
         compound = self._build_compound(candidate)
@@ -109,6 +128,28 @@ class SearchPipeline:
             paper_lists.append(papers)
             diagnostics.append(provider_diagnostics)
 
+        patents: list[PatentItem] = []
+        patents_total_hits: int | None = None
+        if "surechembl" in selected_sources:
+            try:
+                patents, patents_total_hits, patent_diagnostics = self.surechembl.search_patents(
+                    smiles=compound.canonical_smiles,
+                    compound_name=compound.name or query,
+                    inchi_key=compound.inchi_key,
+                    limit=limit,
+                )
+            except Exception:
+                logger.exception("Patent provider 'surechembl' raised unexpectedly.")
+                patents = []
+                patents_total_hits = None
+                patent_diagnostics = ProviderDiagnostics(
+                    name="surechembl",
+                    status="error",
+                    message=PROVIDER_CALL_ERROR,
+                )
+            patents = dedup_patents(patents)[:limit]
+            diagnostics.append(patent_diagnostics)
+
         papers = merge_papers(paper_lists, sort=sort)[:limit]
         status, error = self._derive_status(diagnostics)
         return SearchReport(
@@ -117,6 +158,8 @@ class SearchPipeline:
             status=status,
             compound=compound,
             papers=papers,
+            patents=patents,
+            patents_total_hits=patents_total_hits,
             providers=[*(extra_providers or []), *diagnostics],
             error=error,
         )
@@ -124,20 +167,23 @@ class SearchPipeline:
     @staticmethod
     def _validate_sources(sources: Sequence[str] | None) -> set[str]:
         if sources is None:
-            return set(PAPER_SOURCES)
+            return set(ALL_SOURCES)
         selected = set(sources)
         if not selected:
-            raise ValueError("sources must contain at least one paper source.")
-        invalid = selected - set(PAPER_SOURCES)
+            raise ValueError("sources must contain at least one source.")
+        invalid = selected - set(ALL_SOURCES)
         if invalid:
-            raise ValueError(f"Unsupported sources: {sorted(invalid)}. Expected {PAPER_SOURCES}.")
+            raise ValueError(f"Unsupported sources: {sorted(invalid)}. Expected {ALL_SOURCES}.")
         return selected
 
     @staticmethod
     def _derive_status(diagnostics: list[ProviderDiagnostics]) -> tuple[str, str | None]:
-        """done = no provider hard-errored (empty results are not failures);
-        partial = some provider hard-errored but at least one responded;
-        failed = every provider hard-errored."""
+        """Status spans BOTH paper and patent providers in ``diagnostics``.
+
+        done = no selected provider hard-errored (empty everywhere is still
+        "done" with empty arrays); partial = some selected provider hard-errored
+        but at least one (paper or patent) responded; failed = every selected
+        provider hard-errored."""
         hard_errors = [item for item in diagnostics if item.status in HARD_ERROR_STATUSES]
         succeeded = [item for item in diagnostics if item.status in {"ok", "empty"}]
         if not hard_errors:

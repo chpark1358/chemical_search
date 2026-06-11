@@ -58,6 +58,26 @@ def render_csv(report: SearchReport) -> str:
                 _cell(paper.score),
             ]
         )
+
+    # Patents are a separate result type and follow the papers table as a second
+    # section (a blank row, then a patent header row and patent rows).
+    if report.patents:
+        writer.writerow([])
+        writer.writerow(
+            ["rank", "publication_number", "title", "assignee", "date", "url", "source"]
+        )
+        for rank, patent in enumerate(report.patents, start=1):
+            writer.writerow(
+                [
+                    rank,
+                    _cell(patent.publication_number),
+                    _cell(patent.title),
+                    _cell(patent.assignee),
+                    _cell(patent.date),
+                    _cell(patent.url),
+                    _cell(patent.source),
+                ]
+            )
     return output.getvalue()
 
 
@@ -124,6 +144,22 @@ def render_markdown(report: SearchReport) -> str:
             if len(abstract) > 400:
                 abstract = abstract[:400] + "..."
             lines.append(f"- 초록: {abstract}")
+        lines.append("")
+
+    patents_heading = "## 특허"
+    if report.patents_total_hits is not None:
+        patents_heading += f" (상위 {len(report.patents)}건 / 전체 {report.patents_total_hits}건)"
+    lines.extend([patents_heading, ""])
+    if not report.patents:
+        lines.append("- 검색된 특허가 없습니다.")
+    for index, patent in enumerate(report.patents, start=1):
+        link = f"[{patent.title}]({patent.url})" if patent.url else patent.title
+        lines.append(f"### {index}. {link}")
+        lines.append("")
+        lines.append(f"- 공개번호: {patent.publication_number or '-'}")
+        lines.append(f"- 출원인/양수인: {patent.assignee or '-'}")
+        lines.append(f"- 날짜: {patent.date or '-'}")
+        lines.append(f"- 출처: {patent.source}")
         lines.append("")
 
     lines.extend(["## 경고", ""])

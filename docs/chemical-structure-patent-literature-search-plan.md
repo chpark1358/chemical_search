@@ -2,10 +2,11 @@
 
 > **[2026-06-11 스코프 변경 공지]**
 >
-> 2026-06-11부로 제품 스코프가 **논문 전용(papers-only)** 으로 축소됐다 (D-010, `docs/chemical-search-progress/decision-log.md`).
+> 2026-06-11부로 제품 스코프가 한 차례 **논문 전용(papers-only)** 으로 축소됐다가(D-010, `docs/chemical-search-progress/decision-log.md`), 같은 날 **SureChEMBL 특허 검색(논문과 분리 표시)** 까지 포함하도록 확장됐다 (D-014).
 >
-> - 특허 검색(SureChEMBL, EPO OPS, Google Patents)과 ChEMBL 구조 검색(exact/similarity/substructure)은 범위에서 제외됐다.
-> - 이 문서의 특허/구조검색 관련 내용은 과거 기획 기록으로만 유지하며 현재 구현 대상이 아니다.
+> - 결과 유형은 논문(Semantic Scholar/Crossref/OpenAlex)과 특허(SureChEMBL)로 나뉘며, 논문과 특허는 분리된 결과 섹션으로 표시한다.
+> - EPO OPS와 ChEMBL 구조 검색(exact/similarity/substructure)은 계속 제외한다. Google Patents 통합 검색 링크(D-009)는 SureChEMBL이 제공하는 특허별 Google Patents 딥링크로 대체됐다.
+> - 이 문서의 EPO OPS/구조검색 관련 내용은 과거 기획 기록으로만 유지하며 현재 구현 대상이 아니다.
 > - 실제 API 계약은 snake_case JSON이며, 기준은 FastAPI `/docs`(OpenAPI)와 `src/lib/api.ts`다.
 
 작성일: 2026-06-02

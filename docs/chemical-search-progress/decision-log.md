@@ -231,3 +231,29 @@ Semantic Scholar가 무료 도메인 이메일과 서드파티 앱에 대한 API
 ### 영향
 
 provider adapter, 검색 파이프라인, UI 소스 칩·필터에 OpenAlex를 추가해야 한다. 결과 병합(중복 제거) 시 메타데이터 풍부도 기준 우선순위는 `semantic_scholar > openalex > crossref`로 정의하고, 기존 citations/abstract/venue/doi/url/year backfill 동작은 유지한다. 환경 변수 `OPENALEX_MAILTO`가 추가된다(미설정 시 `CROSSREF_MAILTO` 사용, 둘 다 없으면 mailto 파라미터 생략).
+
+## D-014: 특허 검색을 SureChEMBL로 재도입하고 논문과 분리해 표시한다
+
+날짜: 2026-06-11
+상태: 확정
+
+### 결정
+
+특허 검색을 SureChEMBL provider로 재도입한다. 특허는 논문(Semantic Scholar/Crossref/OpenAlex)과 분리된 별도 결과 유형으로 표시한다. 새 source 이름은 `surechembl`(특허 소스)이며, `sources` 미지정 시 기본값은 논문 3소스 + `surechembl` 전체다. 이미 PubChem+RDKit으로 정규화된 화합물에서 SureChEMBL `chemical_id`를 resolve(SMILES 우선, name fallback)한 뒤 해당 화합물의 특허 문서를 조회한다.
+
+### 이유
+
+사용자 요구. 사용자가 논문과 특허를 분리해서 보길 명시적으로 요청했다. 2026-06-11 SureChEMBL을 라이브로 재검증한 결과 TLS가 정상이고(`https://www.surechembl.org/api` 접근 가능), `/api/v3/api-docs`로 OpenAPI가 문서화돼 있으며, API key 없이 화합물→특허 매핑과 특허별 Google Patents 딥링크를 얻을 수 있다. 이전 특허 블로커였던 SureChEMBL TLS 장애(O-002)와 EPO OPS 인증 미해결(O-003) 중 SureChEMBL은 해소됐다.
+
+### 범위
+
+SureChEMBL만 추가한다. EPO OPS와 ChEMBL 구조 검색(exact/similarity/substructure)은 여전히 제외한다. Google Patents 자동 수집은 추가하지 않고, SureChEMBL이 제공하는 특허별 Google Patents 딥링크만 사용한다.
+
+### 영향
+
+- `SearchRecord`에 특허 결과 배열 `patents[]`와 `patents_total_hits`(SureChEMBL `total_hits`, "상위 N건 / 전체 N건" 표시용, 미검색 시 null)를 추가한다. `patents[]`의 각 항목은 `{id, publication_number, title, url, assignee, date, source:"surechembl"}` 형태다.
+- `providers[]` 진단 배열에 `surechembl`이 추가된다(`status`/`latency_ms`/`cached`/`retry_count`/`message`).
+- UI는 논문/특허를 분리된 탭(결과 섹션)으로 표시한다.
+- 검색 상태(done/partial/failed) 판정이 논문·특허 두 결과 유형을 모두 포괄하도록 갱신된다. 모든 곳이 비어 있어도 기존 관례대로 빈 배열과 함께 `done`이다.
+- API key는 추가되지 않는다(SureChEMBL keyless).
+- 이 결정은 D-009(Google Patents 링크아웃)와 D-010(특허 제외)을 부분 갱신한다. D-009의 통합 검색 링크 대신 특허별 딥링크를 사용하고, D-010의 특허 제외 중 SureChEMBL 부분을 되돌린다(EPO OPS/ChEMBL 구조검색 제외는 유지).

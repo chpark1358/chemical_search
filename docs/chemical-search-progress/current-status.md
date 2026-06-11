@@ -4,25 +4,29 @@
 
 ## 한 줄 요약
 
-2026-06-11부로 제품 스코프가 화학물질 기반 논문 검색(papers-only)으로 축소됐고(D-010), 월드컵 앱 제거(D-012)와 루트 라우트 Linear 스타일 UI 재설계(D-011)를 포함한 백엔드/프론트 재작업이 진행 중이다.
+2026-06-11부로 제품 스코프가 화학물질 기반 논문 검색(papers-only)으로 축소됐고(D-010), 월드컵 앱 제거(D-012)와 루트 라우트 Linear 스타일 UI 재설계(D-011)를 포함한 백엔드/프론트 재작업이 진행 중이다. 같은 날 특허 검색이 SureChEMBL로 재도입돼(D-014) 결과 유형이 논문(Semantic Scholar/Crossref/OpenAlex 3소스)과 특허(SureChEMBL)로 분리됐다.
 
 ## 스코프 변경 (2026-06-11)
 
 ### 제거됨
 
 - ChEMBL 구조 검색 전체: exact/similarity/substructure provider, 검색 모드/threshold 파라미터
-- 특허 검색 범위 전체: SureChEMBL, EPO OPS, Google Patents 외부 검색 링크
+- EPO OPS 특허 메타데이터 보강: 범위 제외 유지(O-003)
+- Google Patents 통합 검색 링크(D-009): 특허별 SureChEMBL 딥링크로 대체(D-014)
 - ideal-worldcup Next.js 앱: 커밋 `9cd47e2`에서 제거, git 히스토리로 복원 가능
 - `/chemical` 분리 라우트: 루트 라우트 `/`로 대체 진행 중
 - 검색 상태값 `partial_failed`: `partial`로 개명 진행 중
+
+참고: 특허 검색은 한 차례 전면 제외됐다가(D-010) 2026-06-11 SureChEMBL provider로 재도입됐다(D-014). EPO OPS/ChEMBL 구조검색은 계속 제외한다.
 
 ### 유지됨
 
 - 입력 감지(name/SMILES/InChI/InChIKey/formula)와 RDKit 구조 정규화
 - PubChem 후보 resolver와 candidate selection 흐름
-- 논문 adapter: Semantic Scholar/Crossref에 2026-06-11 OpenAlex 추가(D-013). 유효 소스는 `semantic_scholar | crossref | openalex` 3개이며 Semantic Scholar는 무인증 best-effort로 유지
+- 논문 adapter: Semantic Scholar/Crossref에 2026-06-11 OpenAlex 추가(D-013). 유효 논문 소스는 `semantic_scholar | crossref | openalex` 3개이며 Semantic Scholar는 무인증 best-effort로 유지
+- 특허 source: SureChEMBL(`surechembl`) 2026-06-11 재도입(D-014). 논문과 분리된 결과 유형으로 표시하며 API key 불필요. `sources` 미지정 시 기본값은 논문 3소스 + `surechembl` 전체
 - provider cache/retry/throttle과 partial result 처리
-- FastAPI normalize/search/candidate selection/result/export 엔드포인트 (record 스키마는 papers-only로 변경 중)
+- FastAPI normalize/search/candidate selection/result/export 엔드포인트 (record 스키마는 papers-only 기준에 `patents[]`/`patents_total_hits` 추가 중)
 - CSV/Markdown/JSON export
 
 ## 완료된 작업 (새 스코프 기준)
@@ -56,10 +60,11 @@
 - `crossref_search`: ok
 - `semantic_scholar_search`: partial, 무인증 HTTP 429. key 신규 발급이 사실상 중단되어 best-effort로 유지 (O-007 완화, D-013)
 - `openalex_search`: 미검증 — provider 구현 후 결과를 기록한다
+- `surechembl`: 2026-06-11 라이브 재검증으로 HTTPS/화합물→특허 매핑 정상 확인(D-014, O-002). provider 구현 후 상세 결과를 기록한다
 - `provider_cache`: ok, 동일 검색의 두 번째 요청이 cache hit로 처리됨
 - `quality_fixture`: ok, 정규화 10/10 통과
-- papers-only 재설계(백엔드 스키마 변경, 루트 UI)의 검증 결과는 아직 없음 — 재작업 완료 후 기록한다
-- 구 스코프 결과(`chembl_*`, `surechembl_*`, `epo_ops_*`, `/chemical` UI 검증)는 범위 제외로 추적을 중단한다
+- papers-only 재설계와 SureChEMBL 특허 재도입(백엔드 스키마 변경, 루트 UI)의 검증 결과는 아직 없음 — 재작업 완료 후 기록한다
+- 구 스코프 결과(`chembl_*`, `epo_ops_*`, `/chemical` UI 검증)는 범위 제외로 추적을 중단한다
 
 ## 현재 주요 산출물
 

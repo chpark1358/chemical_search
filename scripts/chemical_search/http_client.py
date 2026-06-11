@@ -23,6 +23,13 @@ _RETRYABLE_CONNECTION_ERRORS = (
     requests.exceptions.ChunkedEncodingError,
 )
 
+# Per-host minimum interval overrides (seconds). Hosts not listed fall back to
+# ``min_interval_seconds``. SureChEMBL asks callers to be polite, so we throttle
+# its host more conservatively than the default.
+_HOST_MIN_INTERVAL_SECONDS: dict[str, float] = {
+    "www.surechembl.org": 0.34,
+}
+
 
 class ProviderHttpError(RuntimeError):
     """Raised when a provider request fails after retries.
@@ -82,9 +89,60 @@ class HttpClient:
         cache_ttl_seconds: int = 0,
         retries: int = 0,
     ) -> tuple[dict[str, Any], HttpDiagnostics]:
+        return self._request_json(
+            "GET",
+            url,
+            headers=headers,
+            cache_ttl_seconds=cache_ttl_seconds,
+            retries=retries,
+        )
+
+    def post_json(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        json_body: Any | None = None,
+        cache_ttl_seconds: int = 0,
+        retries: int = 0,
+    ) -> tuple[dict[str, Any], HttpDiagnostics]:
+        """POST a (usually empty) JSON body. SureChEMBL passes all params as
+        query string and expects no/empty body, so ``json_body`` defaults to
+        ``None``."""
+        return self._request_json(
+            "POST",
+            url,
+            headers=headers,
+            json_body=json_body,
+            cache_ttl_seconds=cache_ttl_seconds,
+            retries=retries,
+        )
+
+    def _request_json(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        json_body: Any | None = None,
+        cache_ttl_seconds: int = 0,
+        retries: int = 0,
+    ) -> tuple[dict[str, Any], HttpDiagnostics]:
         started = time.perf_counter()
         request_headers = headers or {}
-        cache_key = json.dumps([url, sorted(request_headers.items())], separators=(",", ":"))
+        method = method.upper()
+        # GET keeps its original two-element cache key so existing on-disk
+        # caches stay valid; other methods add method/body to the key.
+        if method == "GET":
+            cache_key = json.dumps(
+                [url, sorted(request_headers.items())], separators=(",", ":")
+            )
+        else:
+            cache_key = json.dumps(
+                [method, url, sorted(request_headers.items()), json_body],
+                separators=(",", ":"),
+                sort_keys=True,
+            )
         cached = self.cache.get(cache_key)
         if cached is not None:
             return cached, self._diagnostics(started, 0, cached=True)
@@ -93,11 +151,19 @@ class HttpClient:
         for attempt in range(retries + 1):
             self._throttle(url)
             try:
-                response = self.session.get(
-                    url,
-                    timeout=self.timeout_seconds,
-                    headers=request_headers,
-                )
+                if method == "GET":
+                    response = self.session.get(
+                        url,
+                        timeout=self.timeout_seconds,
+                        headers=request_headers,
+                    )
+                else:
+                    response = self.session.post(
+                        url,
+                        timeout=self.timeout_seconds,
+                        headers=request_headers,
+                        json=json_body,
+                    )
             except requests.Timeout as exc:
                 # ConnectTimeout subclasses both Timeout and ConnectionError;
                 # catching Timeout first classifies it as a timeout.
@@ -203,9 +269,13 @@ class HttpClient:
 
     def _throttle(self, url: str) -> None:
         host = urlparse(url).netloc
+        interval = max(
+            self.min_interval_seconds,
+            _HOST_MIN_INTERVAL_SECONDS.get(host, 0.0),
+        )
         with self._throttle_lock:
             now = self.monotonic_fn()
-            ready_at = max(now, self.last_request_at.get(host, 0.0) + self.min_interval_seconds)
+            ready_at = max(now, self.last_request_at.get(host, 0.0) + interval)
             wait_seconds = ready_at - now
             self.last_request_at[host] = ready_at
         if wait_seconds > 0:

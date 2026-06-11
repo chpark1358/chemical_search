@@ -18,7 +18,12 @@ export type InputType =
   | "inchi_key"
   | "formula";
 
-export type SourceName = "semantic_scholar" | "crossref" | "openalex";
+export type PaperSourceName = "semantic_scholar" | "crossref" | "openalex";
+
+export type PatentSourceName = "surechembl";
+
+/** 논문/특허 출처를 모두 포함하는 검색 소스 식별자. */
+export type SourceName = PaperSourceName | PatentSourceName;
 
 export type SortKey = "relevance" | "citations" | "year";
 
@@ -58,8 +63,18 @@ export interface Paper {
   url: string | null;
   citations: number | null;
   abstract: string | null;
-  source: SourceName;
+  source: PaperSourceName;
   score: number;
+}
+
+export interface Patent {
+  id: string;
+  publication_number: string;
+  title: string;
+  url: string | null;
+  assignee: string | null;
+  date: string | null;
+  source: PatentSourceName;
 }
 
 export interface ProviderResult {
@@ -79,6 +94,8 @@ export interface SearchRecord {
   compound: CompoundInfo | null;
   candidates: Candidate[];
   papers: Paper[];
+  patents: Patent[];
+  patents_total_hits: number | null;
   providers: ProviderResult[];
   error: string | null;
   created_at: string;

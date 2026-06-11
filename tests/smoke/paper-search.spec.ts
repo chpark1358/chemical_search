@@ -46,8 +46,39 @@ const PROVIDERS_OK: Json[] = [
     cached: false,
     retry_count: 0,
     message: null
+  },
+  {
+    name: "surechembl",
+    status: "ok",
+    latency_ms: 640,
+    cached: false,
+    retry_count: 0,
+    message: null
   }
 ];
+
+const PATENTS: Json[] = [
+  {
+    id: "CN-102369480-A",
+    publication_number: "CN102369480A",
+    title: "Aspirin sustained-release composition",
+    url: "https://patents.google.com/patent/CN102369480A/en",
+    assignee: "Example Pharma Co",
+    date: "2012-03-07",
+    source: "surechembl"
+  },
+  {
+    id: "US-1234567-A",
+    publication_number: "US1234567A",
+    title: "Process for preparing acetylsalicylic acid",
+    url: "https://patents.google.com/patent/US1234567A/en",
+    assignee: null,
+    date: null,
+    source: "surechembl"
+  }
+];
+
+const PATENTS_TOTAL_HITS = 692924;
 
 const PAPERS: Json[] = [
   {
@@ -119,6 +150,8 @@ function record(overrides: Json): Json {
     compound: null,
     candidates: [],
     papers: [],
+    patents: [],
+    patents_total_hits: null,
     providers: [PUBCHEM_PROVIDER],
     error: null,
     created_at: "2026-06-11T00:00:00Z",
@@ -187,6 +220,8 @@ test("직접 흐름: 검색 → running → done, 정렬 토글 동작", async (
         status: "done",
         compound: COMPOUND,
         papers: PAPERS,
+        patents: PATENTS,
+        patents_total_hits: PATENTS_TOTAL_HITS,
         providers: PROVIDERS_OK,
         completed_at: "2026-06-11T00:00:05Z"
       })
@@ -208,6 +243,10 @@ test("직접 흐름: 검색 → running → done, 정렬 토글 동작", async (
   const openalexChip = page.getByTestId("provider-chip-openalex");
   await expect(openalexChip).toContainText("OpenAlex");
   await expect(openalexChip).toContainText("1건");
+  // SureChEMBL은 특허 출처이므로 특허 건수를 보여준다.
+  const surechemblChip = page.getByTestId("provider-chip-surechembl");
+  await expect(surechemblChip).toContainText("SureChEMBL");
+  await expect(surechemblChip).toContainText("2건");
   await expect(
     page.getByRole("link", { name: /Aspirin and cardiovascular outcomes/ })
   ).toBeVisible();
@@ -236,6 +275,31 @@ test("직접 흐름: 검색 → running → done, 정렬 토글 동작", async (
   // 전체 필터로 복귀하면 모든 논문이 다시 보인다.
   await page.getByRole("button", { name: "전체", exact: true }).click();
   await expect(rows).toHaveCount(3);
+
+  // 결과 탭: 기본은 논문 탭이고 특허 탭에는 특허 건수가 표시된다.
+  const patentTab = page.getByTestId("result-tab-patents");
+  await expect(patentTab).toContainText("특허");
+  await expect(patentTab).toContainText("2");
+  await expect(page.getByTestId("result-tab-papers")).toHaveAttribute(
+    "aria-selected",
+    "true"
+  );
+  // 특허 탭으로 전환하면 특허 행과 Google Patents 외부 링크가 렌더된다.
+  await patentTab.click();
+  const patentRows = page.getByTestId("patent-list").getByRole("listitem");
+  await expect(patentRows).toHaveCount(2);
+  await expect(patentRows.first()).toContainText("CN102369480A");
+  const patentLink = page.getByRole("link", {
+    name: /Aspirin sustained-release composition/
+  });
+  await expect(patentLink).toBeVisible();
+  await expect(patentLink).toHaveAttribute(
+    "href",
+    "https://patents.google.com/patent/CN102369480A/en"
+  );
+  await expect(patentLink).toHaveAttribute("target", "_blank");
+  // 상위/전체 건수 헤더가 표시된다.
+  await expect(page.getByText(/전체\s+692,924\s*건/)).toBeVisible();
 });
 
 test("후보 선택 흐름: needs_candidate_selection → 선택 → done", async ({ page }) => {

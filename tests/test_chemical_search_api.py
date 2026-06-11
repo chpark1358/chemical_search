@@ -20,6 +20,7 @@ from chemical_search.models import (
     CompoundCandidate,
     CompoundInfo,
     PaperItem,
+    PatentItem,
     ProviderDiagnostics,
     SearchReport,
 )
@@ -60,6 +61,18 @@ def paper(title: str = "Aspirin paper") -> PaperItem:
     )
 
 
+def patent(title: str = "Aspirin patent") -> PatentItem:
+    return PatentItem(
+        id="CN-102369480-A",
+        publication_number="CN102369480A",
+        title=title,
+        url="https://patents.google.com/patent/CN102369480A/en",
+        assignee="ACME Corp",
+        date="2012-03-07",
+        source="surechembl",
+    )
+
+
 class FakePipeline:
     def __init__(
         self,
@@ -68,6 +81,8 @@ class FakePipeline:
         detected_type: str = "formula",
         report_status: str = "done",
         paper_title: str = "Aspirin paper",
+        patents: list[PatentItem] | None = None,
+        patents_total_hits: int | None = None,
         run_error: Exception | None = None,
         resolve_error: Exception | None = None,
         resolution_status: str = "ok",
@@ -76,6 +91,8 @@ class FakePipeline:
         self.detected_type = detected_type
         self.report_status = report_status
         self.paper_title = paper_title
+        self.patents = patents if patents is not None else []
+        self.patents_total_hits = patents_total_hits
         self.run_error = run_error
         self.resolve_error = resolve_error
         self.resolution_status = resolution_status
@@ -112,10 +129,13 @@ class FakePipeline:
                 cid=candidate.cid,
             ),
             papers=[paper(self.paper_title)],
+            patents=list(self.patents),
+            patents_total_hits=self.patents_total_hits,
             providers=[
                 *(kwargs.get("extra_providers") or []),
                 ProviderDiagnostics(name="semantic_scholar", status="ok", latency_ms=5),
                 ProviderDiagnostics(name="crossref", status="empty", latency_ms=7),
+                ProviderDiagnostics(name="surechembl", status="ok", latency_ms=9),
             ],
             error="일부 제공자에서 오류가 발생했습니다." if self.report_status == "partial" else None,
         )
@@ -178,6 +198,8 @@ class SearchFlowTests(unittest.TestCase):
                 "compound",
                 "candidates",
                 "papers",
+                "patents",
+                "patents_total_hits",
                 "providers",
                 "error",
                 "created_at",
@@ -212,6 +234,53 @@ class SearchFlowTests(unittest.TestCase):
         )
         self.assertIs(pipeline.run_calls[0]["candidate"], pipeline.candidates[0])
         self.assertIsNone(pipeline.run_calls[0]["sources"])
+
+    def test_patents_are_serialized_with_contract_keys(self):
+        pipeline = FakePipeline(
+            candidates=candidates()[:1],
+            detected_type="name",
+            patents=[patent()],
+            patents_total_hits=692924,
+        )
+        client = make_client(pipeline)
+
+        created = client.post("/api/searches", json={"query": "aspirin"}).json()
+        result = client.get(f"/api/searches/{created['search_id']}").json()
+
+        self.assertEqual(result["patents_total_hits"], 692924)
+        self.assertEqual(len(result["patents"]), 1)
+        self.assertEqual(
+            set(result["patents"][0].keys()),
+            {"id", "publication_number", "title", "url", "assignee", "date", "source"},
+        )
+        self.assertEqual(result["patents"][0]["publication_number"], "CN102369480A")
+        self.assertEqual(result["patents"][0]["source"], "surechembl")
+
+    def test_empty_patents_serialize_as_empty_array_and_null_hits(self):
+        client = make_client(FakePipeline(candidates=candidates()[:1], detected_type="name"))
+
+        created = client.post("/api/searches", json={"query": "aspirin"}).json()
+        result = client.get(f"/api/searches/{created['search_id']}").json()
+
+        self.assertEqual(result["patents"], [])
+        self.assertIsNone(result["patents_total_hits"])
+
+    def test_surechembl_source_selection_is_forwarded_to_pipeline(self):
+        pipeline = FakePipeline(
+            candidates=candidates()[:1], detected_type="name", patents=[patent()]
+        )
+        client = make_client(pipeline)
+
+        created = client.post(
+            "/api/searches",
+            json={"query": "aspirin", "sources": ["surechembl"]},
+        )
+        self.assertEqual(created.status_code, 200)
+
+        result = client.get(f"/api/searches/{created.json()['search_id']}").json()
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(pipeline.run_calls[0]["sources"], ["surechembl"])
+        self.assertEqual(len(result["patents"]), 1)
 
     def test_zero_candidates_for_formula_is_failed_with_korean_error(self):
         client = make_client(FakePipeline(candidates=[], detected_type="formula"))
@@ -270,6 +339,23 @@ class ValidationTests(unittest.TestCase):
         response = self.client.post(
             "/api/searches",
             json={"query": "aspirin", "sources": ["semantic_scholar", "crossref", "openalex"]},
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_surechembl_source_is_accepted(self):
+        response = self.client.post(
+            "/api/searches",
+            json={"query": "aspirin", "sources": ["surechembl"]},
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_all_four_sources_are_accepted(self):
+        response = self.client.post(
+            "/api/searches",
+            json={
+                "query": "aspirin",
+                "sources": ["semantic_scholar", "crossref", "openalex", "surechembl"],
+            },
         )
         self.assertEqual(response.status_code, 200)
 
@@ -357,6 +443,30 @@ class ExportTests(unittest.TestCase):
         json_response = client.get(f"/api/searches/{search_id}/export?format=json")
         self.assertEqual(json_response.status_code, 200)
         self.assertEqual(json_response.json()["papers"][0]["title"], "Aspirin paper")
+
+    def test_export_includes_patents_section(self):
+        client = make_client(
+            FakePipeline(
+                candidates=candidates()[:1],
+                patents=[patent()],
+                patents_total_hits=692924,
+            )
+        )
+        search_id = self._done_search(client)
+
+        markdown_response = client.get(f"/api/searches/{search_id}/export?format=markdown")
+        self.assertIn("## 특허", markdown_response.text)
+        self.assertIn("CN102369480A", markdown_response.text)
+        self.assertIn("692924", markdown_response.text)
+
+        json_response = client.get(f"/api/searches/{search_id}/export?format=json")
+        body = json_response.json()
+        self.assertEqual(body["patents"][0]["publication_number"], "CN102369480A")
+        self.assertEqual(body["patents_total_hits"], 692924)
+
+        csv_response = client.get(f"/api/searches/{search_id}/export?format=csv")
+        self.assertIn("publication_number", csv_response.text)
+        self.assertIn("CN102369480A", csv_response.text)
 
     def test_export_sanitizes_formula_injection(self):
         client = make_client(

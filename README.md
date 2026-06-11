@@ -1,8 +1,9 @@
 # Chemical Paper Search
 
-화학물질 기반 논문 검색 서비스. 화학물질 식별 정보(이름, SMILES, InChI, InChIKey, 분자식)를 RDKit과 PubChem으로 정규화한 뒤, Semantic Scholar, Crossref, OpenAlex에서 관련 논문을 검색한다.
+화학물질 기반 논문/특허 검색 서비스. 화학물질 식별 정보(이름, SMILES, InChI, InChIKey, 분자식)를 RDKit과 PubChem으로 정규화한 뒤, 논문은 Semantic Scholar, Crossref, OpenAlex에서, 특허는 SureChEMBL에서 검색한다. 논문과 특허는 별도 결과 유형으로 분리해 표시한다.
 
-- 검색 대상은 논문 전용(papers-only)이다. 특허 검색과 ChEMBL 구조 검색은 범위에서 제외됐다(D-010, `docs/chemical-search-progress/decision-log.md`).
+- 검색 결과는 논문(Semantic Scholar/Crossref/OpenAlex)과 특허(SureChEMBL)로 나뉜다. 특허 검색은 2026-06-11에 SureChEMBL로 재도입됐고(D-014), 논문과 분리된 결과 섹션으로 노출된다. EPO OPS와 ChEMBL 구조 검색은 여전히 범위에서 제외된다(D-010, D-014, `docs/chemical-search-progress/decision-log.md`).
+- SureChEMBL은 화합물→특허 매핑과 함께 특허별 Google Patents 딥링크를 제공한다(D-009 부분 갱신).
 - 백엔드는 Python FastAPI, 프론트엔드는 Next.js다. Next.js rewrite(`/chemical-api`)로 같은 출처에서 FastAPI를 호출한다.
 
 ## 저장소 구조
@@ -18,7 +19,8 @@
 
 - Node.js 20 이상, npm
 - Python 3.11
-- 외부 네트워크 접근: PubChem, Semantic Scholar, Crossref, OpenAlex
+- 외부 네트워크 접근: PubChem, Semantic Scholar, Crossref, OpenAlex, SureChEMBL(`www.surechembl.org`)
+- SureChEMBL은 API key가 필요 없으므로 특허 검색용 신규 환경 변수는 추가하지 않는다.
 
 ## 설치
 

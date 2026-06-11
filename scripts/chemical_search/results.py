@@ -6,7 +6,7 @@ import math
 from copy import deepcopy
 from typing import Iterable
 
-from .models import UNTITLED_PAPER, PaperItem
+from .models import UNTITLED_PAPER, PaperItem, PatentItem
 
 
 VALID_SORTS = ("relevance", "citations", "year")
@@ -48,6 +48,25 @@ def merge_papers(
         paper.score = _score(rank, paper.citations)
 
     return _sorted(merged, sort)
+
+
+def dedup_patents(patents: list[PatentItem]) -> list[PatentItem]:
+    """Drop patents sharing a publication number, preserving first-seen order.
+
+    Patents come from a single source (SureChEMBL) so there is no cross-source
+    merge; this only removes exact duplicate documents. Patents without a
+    publication number are always kept.
+    """
+    seen: set[str] = set()
+    unique: list[PatentItem] = []
+    for patent in patents:
+        key = patent.publication_number
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        unique.append(patent)
+    return unique
 
 
 def _find_duplicate(merged: list[PaperItem], paper: PaperItem) -> int | None:

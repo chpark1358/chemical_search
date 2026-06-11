@@ -12,7 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from chemical_search.http_client import ProviderHttpError
-from chemical_search.models import UNTITLED_PAPER, HttpDiagnostics
+from chemical_search.models import UNTITLED_PAPER, UNTITLED_PATENT, HttpDiagnostics
 from chemical_search.providers import (
     MISSING_STEREO_WARNING,
     OPENALEX_ABSTRACT_MAX_CHARS,
@@ -20,6 +20,7 @@ from chemical_search.providers import (
     OpenAlexProvider,
     PubChemProvider,
     SemanticScholarProvider,
+    SureChemblProvider,
 )
 
 
@@ -151,16 +152,123 @@ PUBCHEM_NAME_FIXTURE: dict[str, Any] = {
 }
 
 
+SURECHEMBL_SMILES_FIXTURE: dict[str, Any] = {
+    "status": "OK",
+    "timestamp": 1700000000,
+    "error_message": "",
+    "data": {
+        "CC(=O)OC1=CC=CC=C1C(=O)O": {
+            "id": "1353",
+            "chemical_id": "1353",
+            "name": "aspirin",
+            "inchi_key": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+            "smiles": "CC(=O)OC1=CC=CC=C1C(=O)O",
+            "global_frequency": 22,
+        }
+    },
+}
+
+SURECHEMBL_SMILES_EMPTY_FIXTURE: dict[str, Any] = {
+    "status": "OK",
+    "timestamp": 1700000000,
+    "error_message": "",
+    "data": {},
+}
+
+SURECHEMBL_NAME_FIXTURE: dict[str, Any] = {
+    "status": "OK",
+    "timestamp": 1700000000,
+    "error_message": "",
+    "data": [
+        {
+            "chemical_id": "999",
+            "name": "aspirin (other)",
+            "inchi_key": "ZZZZZZZZZZZZZZ-UHFFFAOYSA-N",
+            "global_frequency": 5,
+        },
+        {
+            "chemical_id": "1353",
+            "name": "aspirin",
+            "inchi_key": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+            "global_frequency": 22,
+        },
+    ],
+}
+
+SURECHEMBL_DOCUMENTS_FIXTURE: dict[str, Any] = {
+    "status": "OK",
+    "timestamp": 1700000000,
+    "error_message": "",
+    "data": {
+        "results": {
+            "total_hits": 692924,
+            "documents": [
+                {
+                    "docId": "CN-102369480-A",
+                    "metadata": {
+                        "pd": "2012-03-07",
+                        "titles": [
+                            {"lang": "fr", "titles": ["Composé de revêtement"]},
+                            {"lang": "en", "titles": ["Coating compound"]},
+                        ],
+                        "pdfLink": "",
+                    },
+                    "pa": "ACME Corp",
+                },
+                {
+                    # "null" string sentinels and a non-en-only title block.
+                    "docId": "US-1234567-B2",
+                    "metadata": {
+                        "pd": "null",
+                        "titles": [
+                            {"lang": "de", "titles": ["Beschichtungsmittel"]},
+                        ],
+                        "pdfLink": "",
+                    },
+                    "pa": "null",
+                },
+                {
+                    # Missing metadata/titles entirely.
+                    "docId": "JP-7654321-B",
+                },
+            ],
+            "query": "chemicalIds:1353",
+        }
+    },
+}
+
+SURECHEMBL_DOCUMENTS_EMPTY_FIXTURE: dict[str, Any] = {
+    "status": "OK",
+    "timestamp": 1700000000,
+    "error_message": "",
+    "data": {"results": {"total_hits": 0, "documents": [], "query": "chemicalIds:1353"}},
+}
+
+
 def http_diag() -> HttpDiagnostics:
     return HttpDiagnostics(latency_ms=5, cached=False, retry_count=0)
 
 
 class FakeHttp:
-    """Returns queued payloads; an Exception entry is raised instead."""
+    """Returns queued payloads; an Exception entry is raised instead.
+
+    Both ``get_json`` and ``post_json`` draw from the same FIFO queue so the
+    SureChEMBL two-call flow (POST/GET resolve then POST documents) can be
+    scripted in order.
+    """
 
     def __init__(self, payloads: list):
         self.payloads = list(payloads)
         self.urls: list[str] = []
+        self.methods: list[str] = []
+
+    def _next(self, method: str, url: str) -> tuple[dict[str, Any], HttpDiagnostics]:
+        self.urls.append(url)
+        self.methods.append(method)
+        item = self.payloads.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item, http_diag()
 
     def get_json(
         self,
@@ -170,11 +278,18 @@ class FakeHttp:
         cache_ttl_seconds: int = 0,
         retries: int = 0,
     ) -> tuple[dict[str, Any], HttpDiagnostics]:
-        self.urls.append(url)
-        item = self.payloads.pop(0)
-        if isinstance(item, Exception):
-            raise item
-        return item, http_diag()
+        return self._next("GET", url)
+
+    def post_json(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        json_body: Any | None = None,
+        cache_ttl_seconds: int = 0,
+        retries: int = 0,
+    ) -> tuple[dict[str, Any], HttpDiagnostics]:
+        return self._next("POST", url)
 
 
 class SemanticScholarTests(unittest.TestCase):
@@ -568,6 +683,215 @@ class PubChemTests(unittest.TestCase):
         candidates, diagnostics = provider.resolve_candidates("aspirin", "name", 5)
 
         self.assertEqual(candidates, [])
+        self.assertEqual(diagnostics.status, "error")
+
+
+class SureChemblTests(unittest.TestCase):
+    def test_smiles_lookup_then_documents_parses_patents(self):
+        http = FakeHttp([SURECHEMBL_SMILES_FIXTURE, SURECHEMBL_DOCUMENTS_FIXTURE])
+        provider = SureChemblProvider(http)
+
+        patents, total_hits, diagnostics = provider.search_patents(
+            smiles="CC(=O)OC1=CC=CC=C1C(=O)O",
+            compound_name="aspirin",
+            inchi_key="BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+            limit=10,
+        )
+
+        self.assertEqual(diagnostics.status, "ok")
+        self.assertEqual(diagnostics.name, "surechembl")
+        self.assertEqual(total_hits, 692924)
+        # The two-call flow: POST smiles lookup, then POST documents.
+        self.assertEqual(http.methods, ["POST", "POST"])
+        self.assertIn("/chemical/smiles/?smiles=", http.urls[0])
+        self.assertIn("documents_for_structures?chemicalIds=1353", http.urls[1])
+        self.assertIn("itemsPerPage=10", http.urls[1])
+
+        first = patents[0]
+        self.assertEqual(first.id, "CN-102369480-A")
+        self.assertEqual(first.publication_number, "CN102369480A")
+        self.assertEqual(first.title, "Coating compound")  # prefers lang "en"
+        self.assertEqual(first.url, "https://patents.google.com/patent/CN102369480A/en")
+        self.assertEqual(first.date, "2012-03-07")
+        self.assertEqual(first.assignee, "ACME Corp")
+        self.assertEqual(first.source, "surechembl")
+
+    def test_null_strings_become_none_and_non_en_title_used(self):
+        http = FakeHttp([SURECHEMBL_SMILES_FIXTURE, SURECHEMBL_DOCUMENTS_FIXTURE])
+        provider = SureChemblProvider(http)
+
+        patents, _, _ = provider.search_patents(
+            smiles="CC(=O)OC1=CC=CC=C1C(=O)O",
+            compound_name="aspirin",
+            inchi_key=None,
+            limit=10,
+        )
+
+        second = patents[1]
+        self.assertEqual(second.publication_number, "US1234567B2")
+        # No English title block: fall back to the first available title.
+        self.assertEqual(second.title, "Beschichtungsmittel")
+        # The literal string "null" maps to None.
+        self.assertIsNone(second.date)
+        self.assertIsNone(second.assignee)
+
+    def test_missing_metadata_uses_untitled_placeholder(self):
+        http = FakeHttp([SURECHEMBL_SMILES_FIXTURE, SURECHEMBL_DOCUMENTS_FIXTURE])
+        provider = SureChemblProvider(http)
+
+        patents, _, _ = provider.search_patents(
+            smiles="CC(=O)OC1=CC=CC=C1C(=O)O",
+            compound_name="aspirin",
+            inchi_key=None,
+            limit=10,
+        )
+
+        third = patents[2]
+        self.assertEqual(third.publication_number, "JP7654321B")
+        self.assertEqual(third.title, UNTITLED_PATENT)
+        self.assertIsNone(third.date)
+        self.assertIsNone(third.assignee)
+
+    def test_name_fallback_prefers_inchi_key_match(self):
+        # Empty smiles lookup forces the name fallback; the inchi_key match
+        # (chemical_id 1353) must win over the higher-frequency-ordered first
+        # entry.
+        http = FakeHttp(
+            [
+                SURECHEMBL_SMILES_EMPTY_FIXTURE,
+                SURECHEMBL_NAME_FIXTURE,
+                SURECHEMBL_DOCUMENTS_FIXTURE,
+            ]
+        )
+        provider = SureChemblProvider(http)
+
+        patents, total_hits, diagnostics = provider.search_patents(
+            smiles="CC(=O)OC1=CC=CC=C1C(=O)O",
+            compound_name="aspirin",
+            inchi_key="BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+            limit=10,
+        )
+
+        self.assertEqual(diagnostics.status, "ok")
+        self.assertEqual(http.methods, ["POST", "GET", "POST"])
+        self.assertIn("/chemical/name/aspirin", http.urls[1])
+        self.assertIn("chemicalIds=1353", http.urls[2])
+        self.assertEqual(total_hits, 692924)
+        self.assertTrue(patents)
+
+    def test_name_fallback_inchi_key_match_is_case_insensitive(self):
+        http = FakeHttp(
+            [
+                SURECHEMBL_SMILES_EMPTY_FIXTURE,
+                SURECHEMBL_NAME_FIXTURE,
+                SURECHEMBL_DOCUMENTS_FIXTURE,
+            ]
+        )
+        provider = SureChemblProvider(http)
+
+        provider.search_patents(
+            smiles="CC(=O)OC1=CC=CC=C1C(=O)O",
+            compound_name="aspirin",
+            inchi_key="bsynrymutxbxsq-uhfffaoysa-n",
+            limit=10,
+        )
+
+        self.assertIn("chemicalIds=1353", http.urls[2])
+
+    def test_name_fallback_without_inchi_key_picks_highest_frequency(self):
+        http = FakeHttp(
+            [
+                SURECHEMBL_SMILES_EMPTY_FIXTURE,
+                SURECHEMBL_NAME_FIXTURE,
+                SURECHEMBL_DOCUMENTS_FIXTURE,
+            ]
+        )
+        provider = SureChemblProvider(http)
+
+        provider.search_patents(
+            smiles="CC(=O)OC1=CC=CC=C1C(=O)O",
+            compound_name="aspirin",
+            inchi_key=None,
+            limit=10,
+        )
+
+        # global_frequency 22 (id 1353) beats 5 (id 999).
+        self.assertIn("chemicalIds=1353", http.urls[2])
+
+    def test_no_smiles_uses_name_lookup_directly(self):
+        http = FakeHttp([SURECHEMBL_NAME_FIXTURE, SURECHEMBL_DOCUMENTS_FIXTURE])
+        provider = SureChemblProvider(http)
+
+        patents, _, diagnostics = provider.search_patents(
+            smiles=None,
+            compound_name="aspirin",
+            inchi_key="BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+            limit=10,
+        )
+
+        self.assertEqual(diagnostics.status, "ok")
+        self.assertEqual(http.methods, ["GET", "POST"])
+        self.assertTrue(patents)
+
+    def test_unresolved_chemical_id_is_empty_status(self):
+        # SMILES empty and no name available -> nothing to resolve.
+        http = FakeHttp([SURECHEMBL_SMILES_EMPTY_FIXTURE])
+        provider = SureChemblProvider(http)
+
+        patents, total_hits, diagnostics = provider.search_patents(
+            smiles="CC(=O)OC1=CC=CC=C1C(=O)O",
+            compound_name=None,
+            inchi_key=None,
+            limit=10,
+        )
+
+        self.assertEqual(patents, [])
+        self.assertIsNone(total_hits)
+        self.assertEqual(diagnostics.status, "empty")
+
+    def test_documents_empty_is_empty_status(self):
+        http = FakeHttp([SURECHEMBL_SMILES_FIXTURE, SURECHEMBL_DOCUMENTS_EMPTY_FIXTURE])
+        provider = SureChemblProvider(http)
+
+        patents, total_hits, diagnostics = provider.search_patents(
+            smiles="CC(=O)OC1=CC=CC=C1C(=O)O",
+            compound_name="aspirin",
+            inchi_key=None,
+            limit=10,
+        )
+
+        self.assertEqual(patents, [])
+        self.assertEqual(total_hits, 0)
+        self.assertEqual(diagnostics.status, "empty")
+
+    def test_rate_limit_maps_to_rate_limited_status(self):
+        error = ProviderHttpError("rate_limited", "HTTP 429", http_diag(), http_status=429)
+        provider = SureChemblProvider(FakeHttp([error]))
+
+        patents, total_hits, diagnostics = provider.search_patents(
+            smiles="CCO",
+            compound_name="ethanol",
+            inchi_key=None,
+            limit=10,
+        )
+
+        self.assertEqual(patents, [])
+        self.assertIsNone(total_hits)
+        self.assertEqual(diagnostics.status, "rate_limited")
+
+    def test_documents_error_maps_to_error_status(self):
+        error = ProviderHttpError("error", "HTTP 503", http_diag(), http_status=503)
+        http = FakeHttp([SURECHEMBL_SMILES_FIXTURE, error])
+        provider = SureChemblProvider(http)
+
+        patents, _, diagnostics = provider.search_patents(
+            smiles="CC(=O)OC1=CC=CC=C1C(=O)O",
+            compound_name="aspirin",
+            inchi_key=None,
+            limit=10,
+        )
+
+        self.assertEqual(patents, [])
         self.assertEqual(diagnostics.status, "error")
 
 

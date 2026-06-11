@@ -21,29 +21,35 @@
 
 ### O-002: SureChEMBL API 안정성 검증
 
-상태: 종결 (범위 제외, D-010)
+상태: 해결 / 재개 (특허 검색 재도입, D-014)
 
 현재 결과:
 
-- `https://www.api.surechembl.org/` 호출 시 TLS certificate verification failure가 발생했었다.
-- 2026-06-11 papers-only 피벗으로 특허 검색이 범위에서 제외되어 추적을 종료한다.
+- 과거 `https://www.api.surechembl.org/` 호출 시 TLS certificate verification failure가 발생했고, 2026-06-11 papers-only 피벗(D-010)으로 한 차례 추적을 종료했다.
+- 2026-06-11 SureChEMBL을 라이브로 재검증한 결과 `https://www.surechembl.org/api`가 HTTPS로 정상 접근되며 TLS 문제가 재현되지 않는다. `/api/v3/api-docs`로 OpenAPI가 문서화돼 있고, API key 없이 화합물→특허 매핑과 특허별 Google Patents 딥링크를 얻을 수 있다.
+- D-014로 특허 검색을 SureChEMBL provider로 재도입한다(논문과 분리 표시). 새 API base는 `https://www.surechembl.org/api`이며, 이전 `www.api.surechembl.org` 호스트는 사용하지 않는다.
+
+확인 필요:
+
+- 운영 환경에서 화합물→특허 2단계 호출(resolve → documents)의 throttle/retry 적정성
+- `total_hits`가 큰 화합물의 페이지네이션/표시 범위
 
 영향:
 
-특허 검색을 다시 범위에 넣는 경우에만 재오픈한다.
+특허 검색이 다시 활성 범위에 들어왔다. SureChEMBL 가용성이 특허 결과 가용성에 직접 영향을 준다(논문 결과는 영향받지 않음).
 
 ### O-003: EPO OPS 인증과 quota 확인
 
-상태: 종결 (범위 제외, D-010)
+상태: 종결 (범위 제외 유지, D-010·D-014)
 
 현재 결과:
 
 - `EPO_OPS_CONSUMER_KEY`, `EPO_OPS_CONSUMER_SECRET` 미설정으로 skipped 상태였다.
-- 2026-06-11 papers-only 피벗으로 특허 메타데이터 보강이 범위에서 제외되어 추적을 종료한다.
+- 2026-06-11 특허 검색이 SureChEMBL로 재도입됐지만(D-014), 재도입 범위는 SureChEMBL provider만이다. EPO OPS는 여전히 범위에서 제외한다.
 
 영향:
 
-특허 검색을 다시 범위에 넣는 경우에만 재오픈한다.
+EPO OPS 기반 특허 메타데이터 보강을 다시 범위에 넣는 경우에만 재오픈한다.
 
 ### O-007: Semantic Scholar API key 필요 여부
 

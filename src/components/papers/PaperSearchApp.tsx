@@ -2,14 +2,16 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { isSafeUrl, type Paper, type SortKey } from "@/lib/api";
+import { isSafeUrl, type Paper, type Patent, type SortKey } from "@/lib/api";
 
 import CandidatePicker from "./CandidatePicker";
 import CompoundCard from "./CompoundCard";
 import EmptyState from "./EmptyState";
 import { isActivationTarget, isTypingTarget } from "./keyboard";
 import PaperList from "./PaperList";
+import PatentList from "./PatentList";
 import ProviderChips, { isProviderFailure, providerLabel } from "./ProviderChips";
+import ResultTabs, { type ResultTab } from "./ResultTabs";
 import SearchBar from "./SearchBar";
 import SkeletonList, { LoadingBar } from "./SkeletonList";
 import StatusBanner from "./StatusBanner";
@@ -56,6 +58,7 @@ export default function PaperSearchApp() {
   const [sort, setSort] = useState<SortKey>("relevance");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [selectedIndex, setSelectedIndex] = useState(-1);
+  const [activeTab, setActiveTab] = useState<ResultTab>("papers");
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const isIdle = phase === "idle";
@@ -78,6 +81,11 @@ export default function PaperSearchApp() {
         : papers.filter((paper) => paper.source === sourceFilter);
     return sortPapers(filtered, sort);
   }, [record, sort, sourceFilter]);
+
+  const patents: Patent[] = useMemo(() => record?.patents ?? [], [record]);
+
+  // 키보드 화살표/Enter 내비게이션은 현재 탭의 항목 목록을 대상으로 한다.
+  const navItems = activeTab === "papers" ? visiblePapers : patents;
 
   const failedProviders = useMemo(
     () =>
@@ -110,32 +118,39 @@ export default function PaperSearchApp() {
         return;
       }
 
-      if (typing || !visiblePapers.length) return;
+      if (typing || !navItems.length) return;
 
       if (event.key === "ArrowDown") {
         event.preventDefault();
-        setSelectedIndex((index) => Math.min(index + 1, visiblePapers.length - 1));
+        setSelectedIndex((index) => Math.min(index + 1, navItems.length - 1));
       } else if (event.key === "ArrowUp") {
         event.preventDefault();
         setSelectedIndex((index) => Math.max(index - 1, 0));
       } else if (event.key === "Enter" && selectedIndex >= 0) {
         // 포커스된 링크/버튼 등은 Enter로 자체 동작을 수행하므로 이중 실행을 막는다.
         if (isActivationTarget(event.target)) return;
-        const paper = visiblePapers[selectedIndex];
-        if (paper && isSafeUrl(paper.url)) {
-          window.open(paper.url, "_blank", "noopener,noreferrer");
+        const item = navItems[selectedIndex];
+        if (item && isSafeUrl(item.url)) {
+          window.open(item.url, "_blank", "noopener,noreferrer");
         }
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [visiblePapers, selectedIndex]);
+  }, [navItems, selectedIndex]);
 
   function handleSubmit(value: string) {
     setSort("relevance");
     setSourceFilter("all");
     setSelectedIndex(-1);
+    setActiveTab("papers");
     submit(value);
+  }
+
+  // 탭 전환 시 키보드 선택을 초기화한다 (목록이 달라지므로).
+  function handleTabChange(next: ResultTab) {
+    setSelectedIndex(-1);
+    setActiveTab(next);
   }
 
   // 재시도는 마지막으로 제출한 검색어로 실행되므로, 입력창도 그 값으로 동기화한다.
@@ -230,25 +245,46 @@ export default function PaperSearchApp() {
             {hasResults && record ? (
               <>
                 {record.compound ? <CompoundCard compound={record.compound} /> : null}
-                <ProviderChips papers={record.papers} providers={record.providers} />
+                <ProviderChips
+                  papers={record.papers}
+                  patents={patents}
+                  providers={record.providers}
+                />
                 {phase === "partial" ? (
                   <StatusBanner failedProviders={failedProviders} kind="partial" />
                 ) : null}
-                <Toolbar
-                  count={visiblePapers.length}
-                  onSortChange={handleSortChange}
-                  onSourceFilterChange={handleSourceFilterChange}
-                  searchId={record.search_id}
-                  sort={sort}
-                  sourceFilter={sourceFilter}
-                  total={record.papers.length}
+                <ResultTabs
+                  active={activeTab}
+                  onChange={handleTabChange}
+                  paperCount={record.papers.length}
+                  patentCount={patents.length}
                 />
-                <PaperList
-                  onSelect={setSelectedIndex}
-                  papers={visiblePapers}
-                  selectedIndex={selectedIndex}
-                />
-                {visiblePapers.length ? (
+                {activeTab === "papers" ? (
+                  <>
+                    <Toolbar
+                      count={visiblePapers.length}
+                      onSortChange={handleSortChange}
+                      onSourceFilterChange={handleSourceFilterChange}
+                      searchId={record.search_id}
+                      sort={sort}
+                      sourceFilter={sourceFilter}
+                      total={record.papers.length}
+                    />
+                    <PaperList
+                      onSelect={setSelectedIndex}
+                      papers={visiblePapers}
+                      selectedIndex={selectedIndex}
+                    />
+                  </>
+                ) : (
+                  <PatentList
+                    onSelect={setSelectedIndex}
+                    patents={patents}
+                    selectedIndex={selectedIndex}
+                    totalHits={record.patents_total_hits}
+                  />
+                )}
+                {navItems.length ? (
                   <p className="font-mono text-[11px] text-ink-tertiary">
                     ↑↓ 이동 · Enter 열기 · Esc 해제
                   </p>
