@@ -1,6 +1,17 @@
+import AccountMenu from "@/components/auth/AccountMenu";
 import PaperSearchApp from "@/components/papers/PaperSearchApp";
+import { createClient } from "@/lib/supabase/server";
 
-export default function HomePage() {
+// 로그인 세션(쿠키)에 따라 헤더가 달라지므로 정적 생성하지 않는다.
+export const dynamic = "force-dynamic";
+
+export default async function HomePage() {
+  const supabase = await createClient();
+  const {
+    data: { user }
+  } = await supabase.auth.getUser();
+  const email = user?.email ?? "";
+
   return (
     <div className="flex min-h-screen flex-col">
       <header className="sticky top-0 z-20 h-14 border-b border-hairline bg-canvas/80 backdrop-blur">
@@ -16,12 +27,7 @@ export default function HomePage() {
               Chemical Papers
             </span>
           </div>
-          <div className="flex items-center gap-2 text-xs text-ink-tertiary">
-            <span className="hidden sm:inline">빠른 검색</span>
-            <kbd className="rounded-md border border-hairline bg-surface-1 px-1.5 py-0.5 font-mono text-[11px] text-ink-subtle">
-              /
-            </kbd>
-          </div>
+          {email ? <AccountMenu email={email} /> : null}
         </div>
       </header>
       <main className="mx-auto w-full max-w-[1200px] flex-1 px-6">

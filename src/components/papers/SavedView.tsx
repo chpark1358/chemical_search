@@ -127,7 +127,7 @@ export default function SavedView({ items }: { items: SavedItem[] }) {
         </p>
         <p className="max-w-sm text-xs leading-5 text-ink-subtle">
           검색 결과에서 항목의 별(☆)을 눌러 저장하면 이곳에 모입니다. 저장한 항목은
-          이 브라우저에 보관되어 다음에 다시 열어도 그대로 남아 있습니다.
+          계정에 보관되어 어느 기기에서 로그인하든 그대로 남아 있습니다.
         </p>
       </div>
     );

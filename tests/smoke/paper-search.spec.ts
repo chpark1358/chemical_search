@@ -1,5 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
+import { setFakeAuthCookie } from "./auth";
+
 type Json = Record<string, unknown>;
 
 const COMPOUND: Json = {
@@ -251,6 +253,26 @@ async function submitQuery(page: Page, query: string) {
   }).toPass({ timeout: 15_000 });
   await button.click();
 }
+
+// 앱 전체가 로그인 게이트 뒤에 있다. 검색/저장/내보내기 스모크는 로그인 상태를
+// 가정하므로, 매 테스트 전 가짜 세션 쿠키를 심어 게이트를 통과시킨다.
+// (NEXT_PUBLIC_SUPABASE_URL이 로컬 목 서버를 가리키므로 미들웨어의 getUser()가
+//  서버에서 가짜 사용자를 받아 통과한다. 앱 코드에는 우회 로직이 없다.)
+test.beforeEach(async ({ context }) => {
+  await setFakeAuthCookie(context);
+});
+
+test("비로그인 시 /login으로 리다이렉트된다", async ({ page, context }) => {
+  // 이 테스트만 세션 쿠키 없이 진입해 게이트 동작을 검증한다.
+  await context.clearCookies();
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/login(\?|$)/);
+  await expect(page.getByTestId("auth-email")).toBeVisible();
+  await expect(page.getByTestId("auth-password")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "로그인", exact: true })
+  ).toBeVisible();
+});
 
 test("직접 흐름: 검색 → running → done, 정렬 토글 동작", async ({ page }) => {
   await mockApi(page, {
@@ -555,23 +577,22 @@ test("Stage 3: 별로 논문 저장 → 저장됨 뷰에 표시 + 제목/메모 
   await expect(savedRows).toHaveCount(1);
   await expect(savedRows.first()).toContainText("Aspirin and cardiovascular outcomes");
 
-  // 커스텀 제목과 메모를 편집하면(autosave) 새로고침 후에도 유지된다.
+  // 커스텀 제목과 메모를 편집하면(낙관적 autosave) 즉시 입력값/표시에 반영된다.
+  // (영속은 Supabase에 저장되며, 스모크의 목 서버는 GET을 []로 응답하므로
+  //  새로고침 후 재조회 결과까지는 검증하지 않는다 — UI 동작만 검증한다.)
   const titleInput = savedRows.first().getByTestId("saved-custom-title");
   await titleInput.fill("내 즐겨찾기 제목");
   const memoInput = savedRows.first().getByTestId("saved-memo");
   await memoInput.fill("심혈관 관련 핵심 논문");
 
-  await page.reload();
-  // 새로고침 후 유휴 상태에서 저장됨 뷰로 다시 진입한다(저장은 localStorage에 영속).
-  await page.getByTestId("saved-nav").click();
-  const reloadedRow = page.getByTestId("saved-view").getByTestId("saved-row").first();
-  await expect(reloadedRow.getByTestId("saved-custom-title")).toHaveValue(
+  const editedRow = page.getByTestId("saved-view").getByTestId("saved-row").first();
+  await expect(editedRow.getByTestId("saved-custom-title")).toHaveValue(
     "내 즐겨찾기 제목"
   );
-  await expect(reloadedRow.getByTestId("saved-memo")).toHaveValue("심혈관 관련 핵심 논문");
+  await expect(editedRow.getByTestId("saved-memo")).toHaveValue("심혈관 관련 핵심 논문");
   // 커스텀 제목이 표시 제목이 되고 원제목은 부제로 노출된다.
-  await expect(reloadedRow).toContainText("내 즐겨찾기 제목");
-  await expect(reloadedRow).toContainText("원제목: Aspirin and cardiovascular outcomes");
+  await expect(editedRow).toContainText("내 즐겨찾기 제목");
+  await expect(editedRow).toContainText("원제목: Aspirin and cardiovascular outcomes");
 
   // 내보내기 메뉴에 BibTeX 옵션이 있다(저장 논문도 인용 포맷 지원).
   await page.getByTestId("saved-export-trigger").click();

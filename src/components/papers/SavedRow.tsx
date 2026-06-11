@@ -50,7 +50,7 @@ export default function SavedRow({
   onToggleCheck,
   onRemove
 }: SavedRowProps) {
-  // 로컬 편집 버퍼. localStorage 갱신은 입력마다 즉시 일어난다(autosave).
+  // 로컬 편집 버퍼. Supabase 갱신은 입력마다 즉시 일어난다(낙관적 autosave).
   const [customTitle, setCustomTitle] = useState(item.customTitle ?? "");
   const [memo, setMemo] = useState(item.memo);
   const [tagDraft, setTagDraft] = useState("");

@@ -10,6 +10,8 @@
     "test:smoke": "playwright test tests/smoke"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.12.0",
+    "@supabase/supabase-js": "^2.108.1",
     "exceljs": "^4.4.0",
     "lucide-react": "^0.468.0",
     "next": "16.2.6",
