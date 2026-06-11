@@ -20,8 +20,8 @@ class ParseLineTests(unittest.TestCase):
         self.assertEqual(_parse_line("KEY='value'"), ("KEY", "value"))
 
     def test_value_with_equals_kept(self):
-        # A KIPRIS decoding key can contain '=' inside the value.
-        self.assertEqual(_parse_line("K=/iIRlZ=bUkU="), ("K", "/iIRlZ=bUkU="))
+        # A base64-style key can contain '/' and '=' inside the value.
+        self.assertEqual(_parse_line("K=ab/cd=ef=gh="), ("K", "ab/cd=ef=gh="))
 
     def test_ignores_comments_blanks_and_malformed(self):
         self.assertIsNone(_parse_line("# comment"))
