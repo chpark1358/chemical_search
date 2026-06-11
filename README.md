@@ -72,6 +72,12 @@ npm run dev
 
 `next.config.ts`의 rewrite가 `/chemical-api/:path*`를 `http://127.0.0.1:8000`으로 프록시한다. FastAPI 주소가 다르면 `CHEMICAL_API_URL` 환경 변수로 변경한다.
 
+### 주의: 두 서버는 같은 쪽(Windows 또는 WSL)에서 실행
+
+`.venv-chemical`은 Windows Python이므로 FastAPI는 항상 Windows 쪽 `127.0.0.1:8000`에 바인딩된다. Next.js를 WSL에서 실행하면 WSL의 `127.0.0.1:8000`에는 아무것도 없어 검색 시 **HTTP 500**이 발생한다. `npm run dev`도 PowerShell(Windows)에서 실행해 두 서버를 같은 네트워크 스택에 두는 것을 권장한다. (Windows 실행이 콜드 컴파일도 수 배 빠르다.)
+
+또한 uvicorn을 `--reload` 없이 띄운 채 코드를 갱신하면 구버전 프로세스가 옛 API 스키마로 응답한다. 코드 변경 후에는 서버를 재시작하거나 `--reload` 옵션을 유지한다.
+
 ## 환경 변수
 
 `.env.example`을 `.env`로 복사해 사용한다.
