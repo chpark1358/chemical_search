@@ -6,9 +6,9 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 
-# Valid ``PatentItem.source`` values. SureChEMBL is always available; KIPRIS is
-# key-gated (see providers.is_kipris_enabled).
-PatentSource = Literal["surechembl", "kipris"]
+# Valid ``PatentItem.source`` values. SureChEMBL and Google Patents are always
+# available (no key); KIPRIS is key-gated (see providers.is_kipris_enabled).
+PatentSource = Literal["surechembl", "kipris", "google_patents"]
 
 
 # Placeholder title injected by providers when a paper carries no title.
@@ -82,9 +82,10 @@ class PaperItem:
 
 @dataclass
 class PatentItem:
-    """A single patent document from SureChEMBL or KIPRIS.
+    """A single patent document from SureChEMBL, KIPRIS, or Google Patents.
 
-    ``source`` is one of the patent sources: "surechembl" or "kipris".
+    ``source`` is one of the patent sources: "surechembl", "kipris", or
+    "google_patents".
     """
 
     id: str

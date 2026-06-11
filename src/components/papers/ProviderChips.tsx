@@ -8,6 +8,7 @@ export const PROVIDER_LABELS: Record<string, string> = {
   openalex: "OpenAlex",
   surechembl: "SureChEMBL",
   kipris: "KIPRIS",
+  google_patents: "Google Patents",
   pubchem: "PubChem 해석"
 };
 
@@ -15,7 +16,7 @@ export const PROVIDER_LABELS: Record<string, string> = {
 const PAPER_SOURCES = new Set<string>(["semantic_scholar", "crossref", "openalex"]);
 
 /** 특허 출처 프로바이더. 그 외(예: pubchem)는 화합물 해석 진단 항목이다. */
-const PATENT_SOURCES = new Set<string>(["surechembl", "kipris"]);
+const PATENT_SOURCES = new Set<string>(["surechembl", "kipris", "google_patents"]);
 
 const STATUS_LABELS: Record<ProviderStatus, string> = {
   ok: "정상",

@@ -154,17 +154,61 @@ class FakeSureChemblProvider:
         )
 
 
+def google_patent(suffix: str = "g1", title: str = "Aspirin google patent") -> PatentItem:
+    return PatentItem(
+        id=f"US{suffix}A1",
+        publication_number=f"US{suffix}A1",
+        title=title,
+        url=f"https://patents.google.com/patent/US{suffix}A1/en",
+        assignee="Google Assignee",
+        date="2021-01-01",
+        source="google_patents",
+    )
+
+
+class FakeGooglePatentsProvider:
+    name = "google_patents"
+
+    def __init__(
+        self,
+        patents: list[PatentItem] | None = None,
+        status: str = "ok",
+        total_hits: int | None = None,
+    ):
+        self.patents = patents if patents is not None else []
+        self.status = status
+        self.total_hits = total_hits
+        self.calls: list[dict] = []
+
+    def search_patents(self, *, query, limit):
+        self.calls.append({"query": query, "limit": limit})
+        message = None if self.status in {"ok", "empty"} else f"{self.name} failed"
+        patents = self.patents if self.status == "ok" else []
+        return (
+            list(patents),
+            self.total_hits,
+            ProviderDiagnostics(
+                name=self.name,
+                status=self.status,
+                latency_ms=1,
+                message=message,
+            ),
+        )
+
+
 def make_pipeline(
     semantic_scholar: FakePaperProvider,
     crossref: FakePaperProvider,
     openalex: FakePaperProvider | None = None,
     surechembl: FakeSureChemblProvider | None = None,
+    google_patents: FakeGooglePatentsProvider | None = None,
 ) -> SearchPipeline:
     return SearchPipeline(
         pubchem=ExplodingPubChem(),
         semantic_scholar=semantic_scholar,
         openalex=openalex or FakePaperProvider("openalex", status="empty"),
         crossref=crossref,
+        google_patents=google_patents or FakeGooglePatentsProvider(status="empty"),
         surechembl=surechembl or FakeSureChemblProvider(status="empty"),
     )
 
@@ -212,6 +256,7 @@ class PipelineStatusTests(unittest.TestCase):
             FakePaperProvider("semantic_scholar", status="timeout"),
             FakePaperProvider("crossref", status="error"),
             openalex=FakePaperProvider("openalex", status="rate_limited"),
+            google_patents=FakeGooglePatentsProvider(status="error"),
             surechembl=FakeSureChemblProvider(status="error"),
         )
         report = pipeline.run_papers("aspirin", aspirin_candidate())
@@ -310,9 +355,14 @@ class PipelineBehaviorTests(unittest.TestCase):
         semantic_scholar = FakePaperProvider("semantic_scholar", [paper("semantic_scholar")])
         crossref = FakePaperProvider("crossref", [paper("crossref", title="Other")])
         openalex = FakePaperProvider("openalex", [paper("openalex", title="Third")])
+        google_patents = FakeGooglePatentsProvider([google_patent()], total_hits=8)
         surechembl = FakeSureChemblProvider([patent()], total_hits=42)
         pipeline = make_pipeline(
-            semantic_scholar, crossref, openalex=openalex, surechembl=surechembl
+            semantic_scholar,
+            crossref,
+            openalex=openalex,
+            google_patents=google_patents,
+            surechembl=surechembl,
         )
 
         report = pipeline.run_papers("aspirin", aspirin_candidate(), sources=None)
@@ -320,13 +370,19 @@ class PipelineBehaviorTests(unittest.TestCase):
         self.assertEqual(len(semantic_scholar.calls), 1)
         self.assertEqual(len(openalex.calls), 1)
         self.assertEqual(len(crossref.calls), 1)
+        self.assertEqual(len(google_patents.calls), 1)
         self.assertEqual(len(surechembl.calls), 1)
         self.assertEqual(
             {item.name for item in report.providers},
-            {"semantic_scholar", "openalex", "crossref", "surechembl"},
+            {"semantic_scholar", "openalex", "crossref", "google_patents", "surechembl"},
         )
-        self.assertEqual(len(report.patents), 1)
-        self.assertEqual(report.patents_total_hits, 42)
+        self.assertEqual(len(report.patents), 2)
+        # Google Patents (relevance-ranked) is ordered first, then SureChEMBL.
+        self.assertEqual(
+            [item.source for item in report.patents], ["google_patents", "surechembl"]
+        )
+        # patents_total_hits sums each patent source's reported total: 8 + 42.
+        self.assertEqual(report.patents_total_hits, 50)
 
     def test_sources_subset_skips_other_providers(self):
         semantic_scholar = FakePaperProvider("semantic_scholar", [paper("semantic_scholar")])
@@ -392,6 +448,100 @@ class PipelineBehaviorTests(unittest.TestCase):
         self.assertEqual(call["inchi_key"], "BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
         self.assertTrue(call["smiles"])
 
+    def test_google_patents_runs_with_resolved_compound_name(self):
+        google_patents = FakeGooglePatentsProvider([google_patent()], total_hits=5)
+        pipeline = make_pipeline(
+            FakePaperProvider("semantic_scholar", status="empty"),
+            FakePaperProvider("crossref", status="empty"),
+            google_patents=google_patents,
+        )
+
+        # Korean input still resolves to the English compound name (Aspirin),
+        # which is what Google Patents searches by.
+        pipeline.run_papers("아스피린", aspirin_candidate(), sources=None)
+
+        self.assertEqual(google_patents.calls[0]["query"], "Aspirin")
+
+    def test_google_patents_only_source_skips_other_patent_providers(self):
+        google_patents = FakeGooglePatentsProvider([google_patent()], total_hits=9)
+        surechembl = FakeSureChemblProvider([patent()], total_hits=3)
+        pipeline = make_pipeline(
+            FakePaperProvider("semantic_scholar", status="empty"),
+            FakePaperProvider("crossref", status="empty"),
+            google_patents=google_patents,
+            surechembl=surechembl,
+        )
+
+        report = pipeline.run_papers(
+            "aspirin", aspirin_candidate(), sources=["google_patents"]
+        )
+
+        self.assertEqual(len(google_patents.calls), 1)
+        self.assertEqual(surechembl.calls, [])
+        self.assertEqual([item.name for item in report.providers], ["google_patents"])
+        self.assertEqual([item.source for item in report.patents], ["google_patents"])
+        self.assertEqual(report.patents_total_hits, 9)
+
+    def test_merged_patents_order_google_first_then_surechembl(self):
+        google_patents = FakeGooglePatentsProvider(
+            [google_patent(suffix="g1", title="Google first")], total_hits=2
+        )
+        surechembl = FakeSureChemblProvider(
+            [patent(suffix="2", title="SureChEMBL second")], total_hits=3
+        )
+        pipeline = make_pipeline(
+            FakePaperProvider("semantic_scholar", status="empty"),
+            FakePaperProvider("crossref", status="empty"),
+            google_patents=google_patents,
+            surechembl=surechembl,
+        )
+
+        report = pipeline.run_papers("aspirin", aspirin_candidate(), sources=None)
+
+        self.assertEqual(
+            [item.title for item in report.patents], ["Google first", "SureChEMBL second"]
+        )
+        self.assertEqual(
+            [item.source for item in report.patents], ["google_patents", "surechembl"]
+        )
+
+    def test_cross_source_dedup_keeps_google_over_surechembl(self):
+        # Both sources return the same publication_number; Google (first-seen,
+        # relevance-ranked) must win the dedup.
+        shared = "US20100130542A1"
+        google_patents = FakeGooglePatentsProvider(
+            [
+                PatentItem(
+                    id=shared,
+                    publication_number=shared,
+                    title="From Google",
+                    source="google_patents",
+                )
+            ]
+        )
+        surechembl = FakeSureChemblProvider(
+            [
+                PatentItem(
+                    id=shared,
+                    publication_number=shared,
+                    title="From SureChEMBL",
+                    source="surechembl",
+                )
+            ]
+        )
+        pipeline = make_pipeline(
+            FakePaperProvider("semantic_scholar", status="empty"),
+            FakePaperProvider("crossref", status="empty"),
+            google_patents=google_patents,
+            surechembl=surechembl,
+        )
+
+        report = pipeline.run_papers("aspirin", aspirin_candidate(), sources=None)
+
+        self.assertEqual(len(report.patents), 1)
+        self.assertEqual(report.patents[0].source, "google_patents")
+        self.assertEqual(report.patents[0].title, "From Google")
+
     def test_patents_are_deduplicated_by_publication_number(self):
         surechembl = FakeSureChemblProvider(
             [
@@ -454,10 +604,13 @@ class DefaultSourcesGatingTests(unittest.TestCase):
         # The always-on sources remain present.
         self.assertIn("openalex", sources)
         self.assertIn("crossref", sources)
+        self.assertIn("google_patents", sources)
         self.assertIn("surechembl", sources)
         # KIPRIS is also key-gated and absent without its key.
         self.assertNotIn("kipris", sources)
-        self.assertEqual(set(sources), {"openalex", "crossref", "surechembl"})
+        self.assertEqual(
+            set(sources), {"openalex", "crossref", "google_patents", "surechembl"}
+        )
 
     def test_blank_s2_key_counts_as_unset(self):
         with patch.dict(
@@ -474,6 +627,7 @@ class DefaultSourcesGatingTests(unittest.TestCase):
         self.assertIn("semantic_scholar", sources)
         self.assertIn("openalex", sources)
         self.assertIn("crossref", sources)
+        self.assertIn("google_patents", sources)
         self.assertIn("surechembl", sources)
         self.assertNotIn("kipris", sources)
 
@@ -489,7 +643,14 @@ class DefaultSourcesGatingTests(unittest.TestCase):
             sources = default_sources()
         self.assertEqual(
             set(sources),
-            {"semantic_scholar", "openalex", "crossref", "surechembl", "kipris"},
+            {
+                "semantic_scholar",
+                "openalex",
+                "crossref",
+                "google_patents",
+                "surechembl",
+                "kipris",
+            },
         )
 
     def test_default_sources_none_without_s2_key_skips_semantic_scholar(self):
@@ -507,7 +668,7 @@ class DefaultSourcesGatingTests(unittest.TestCase):
         self.assertNotIn("semantic_scholar", {item.name for item in report.providers})
         self.assertEqual(
             {item.name for item in report.providers},
-            {"openalex", "crossref", "surechembl"},
+            {"openalex", "crossref", "google_patents", "surechembl"},
         )
 
     def test_explicit_semantic_scholar_runs_even_without_key(self):

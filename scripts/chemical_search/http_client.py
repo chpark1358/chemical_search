@@ -26,10 +26,13 @@ _RETRYABLE_CONNECTION_ERRORS = (
 # Per-host minimum interval overrides (seconds). Hosts not listed fall back to
 # ``min_interval_seconds``. SureChEMBL asks callers to be polite, so we throttle
 # its host more conservatively than the default. Wikidata's public SPARQL
-# endpoint asks for >=1s between requests plus a descriptive User-Agent.
+# endpoint asks for >=1s between requests plus a descriptive User-Agent. The
+# Google Patents XHR endpoint is unofficial, so we throttle it to >=1s to stay
+# polite and reduce the chance of being blocked.
 _HOST_MIN_INTERVAL_SECONDS: dict[str, float] = {
     "www.surechembl.org": 0.34,
     "query.wikidata.org": 1.0,
+    "patents.google.com": 1.0,
 }
 
 

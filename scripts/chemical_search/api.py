@@ -37,15 +37,18 @@ from .rendering import render_csv, render_json, render_markdown
 
 logger = logging.getLogger(__name__)
 
-# "surechembl" and "kipris" are PATENT sources; the other three are paper
-# sources. The default (omitted/null) runs the always-on sources — OpenAlex +
-# Crossref (papers) and SureChEMBL (patents) — plus the key-gated sources that
-# are configured: Semantic Scholar only when SEMANTIC_SCHOLAR_API_KEY is set,
-# KIPRIS only when its service key is set (see pipeline.default_sources).
-# "semantic_scholar" and "kipris" remain valid source *values*: selecting
-# "semantic_scholar" explicitly runs it (likely rate-limited) even without a
-# key, while selecting "kipris" without a key simply runs nothing for KIPRIS.
-SearchSource = Literal["semantic_scholar", "crossref", "openalex", "surechembl", "kipris"]
+# "google_patents", "surechembl", and "kipris" are PATENT sources; the other
+# three are paper sources. The default (omitted/null) runs the always-on sources
+# — OpenAlex + Crossref (papers) and Google Patents + SureChEMBL (patents) —
+# plus the key-gated sources that are configured: Semantic Scholar only when
+# SEMANTIC_SCHOLAR_API_KEY is set, KIPRIS only when its service key is set (see
+# pipeline.default_sources). "semantic_scholar" and "kipris" remain valid source
+# *values*: selecting "semantic_scholar" explicitly runs it (likely rate-limited)
+# even without a key, while selecting "kipris" without a key simply runs nothing
+# for KIPRIS.
+SearchSource = Literal[
+    "semantic_scholar", "crossref", "openalex", "google_patents", "surechembl", "kipris"
+]
 InputType = Literal["auto", "name", "smiles", "inchi", "inchi_key", "formula"]
 SortOrder = Literal["relevance", "citations", "year"]
 

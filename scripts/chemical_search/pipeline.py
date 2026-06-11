@@ -25,6 +25,7 @@ from .models import (
 from .normalize import detect_input_type, normalize_structure
 from .providers import (
     CrossrefProvider,
+    GooglePatentsProvider,
     KiprisProvider,
     OpenAlexProvider,
     PubChemProvider,
@@ -46,10 +47,13 @@ logger = logging.getLogger(__name__)
 PAPER_SOURCES = ("semantic_scholar", "openalex", "crossref")
 # Paper sources that are always on by default (no key required).
 DEFAULT_PAPER_SOURCES = ("openalex", "crossref")
-# "kipris" is a patent source like "surechembl" but is only active when its
-# service key is configured (see is_kipris_enabled). It is always a *valid*
-# source; default_sources() decides whether it runs by default.
-PATENT_SOURCES = ("surechembl", "kipris")
+# Patent sources. "google_patents" and "surechembl" are always on (no key
+# required); "kipris" is only active when its service key is configured (see
+# is_kipris_enabled). All three are always *valid* sources; default_sources()
+# decides whether the gated ones run by default.
+PATENT_SOURCES = ("google_patents", "surechembl", "kipris")
+# Patent sources that are always on by default (no key required).
+DEFAULT_PATENT_SOURCES = ("google_patents", "surechembl")
 ALL_SOURCES = (*PAPER_SOURCES, *PATENT_SOURCES)
 HARD_ERROR_STATUSES = {"rate_limited", "timeout", "error"}
 
@@ -67,17 +71,17 @@ KOREAN_ALIAS_RESOLVED_WARNING = (
 def default_sources() -> tuple[str, ...]:
     """The sources used when the caller does not specify any.
 
-    OpenAlex + Crossref (papers) and SureChEMBL (patents) are always on.
-    Semantic Scholar is included only when its API key is set (without it, S2 is
-    unauthenticated and reliably 429s — see is_semantic_scholar_enabled), and
-    KIPRIS only when its service key is set (see is_kipris_enabled). Gated
-    sources absent from the default set are simply not queried — not an error,
-    so they never appear in providers[]/patents[]."""
+    OpenAlex + Crossref (papers) and Google Patents + SureChEMBL (patents) are
+    always on (no key required). Semantic Scholar is included only when its API
+    key is set (without it, S2 is unauthenticated and reliably 429s — see
+    is_semantic_scholar_enabled), and KIPRIS only when its service key is set
+    (see is_kipris_enabled). Gated sources absent from the default set are simply
+    not queried — not an error, so they never appear in providers[]/patents[]."""
     sources: list[str] = []
     if is_semantic_scholar_enabled():
         sources.append("semantic_scholar")
     sources.extend(DEFAULT_PAPER_SOURCES)
-    sources.append("surechembl")
+    sources.extend(DEFAULT_PATENT_SOURCES)
     if is_kipris_enabled():
         sources.append("kipris")
     return tuple(sources)
@@ -94,6 +98,7 @@ class SearchPipeline:
         semantic_scholar: SemanticScholarProvider | None = None,
         openalex: OpenAlexProvider | None = None,
         crossref: CrossrefProvider | None = None,
+        google_patents: GooglePatentsProvider | None = None,
         surechembl: SureChemblProvider | None = None,
         kipris: KiprisProvider | None = None,
         cache_dir: Path | None = None,
@@ -105,6 +110,7 @@ class SearchPipeline:
             or semantic_scholar is None
             or openalex is None
             or crossref is None
+            or google_patents is None
             or surechembl is None
             or kipris is None
         ):
@@ -114,6 +120,7 @@ class SearchPipeline:
         self.semantic_scholar = semantic_scholar or SemanticScholarProvider(http)
         self.openalex = openalex or OpenAlexProvider(http)
         self.crossref = crossref or CrossrefProvider(http)
+        self.google_patents = google_patents or GooglePatentsProvider(http)
         self.surechembl = surechembl or SureChemblProvider(http)
         self.kipris = kipris or KiprisProvider(http)
 
@@ -236,12 +243,13 @@ class SearchPipeline:
 
         The candidate is used directly; candidates are never re-fetched here.
         Papers come from OpenAlex / Crossref plus (when its key is set, or when
-        explicitly requested) Semantic Scholar, and patents from SureChEMBL plus
-        (when its key is set) KIPRIS; the two result types are reported
-        separately. SureChEMBL and KIPRIS patents are merged into
-        a single ``patents`` list, deduplicated by publication number across
-        both sources, and their ``totalCount`` contributions are summed into
-        ``patents_total_hits``.
+        explicitly requested) Semantic Scholar, and patents from Google Patents
+        + SureChEMBL plus (when its key is set) KIPRIS; the two result types are
+        reported separately. The patent providers are merged into a single
+        ``patents`` list, ORDERED Google Patents (relevance-ranked) first, then
+        KIPRIS, then SureChEMBL (recall-ordered), and deduplicated by publication
+        number across all three so the most relevant first-seen record wins. Each
+        source's ``totalCount`` contribution is summed into ``patents_total_hits``.
         """
         selected_sources = self._validate_sources(sources)
         compound = self._build_compound(candidate)
@@ -270,33 +278,37 @@ class SearchPipeline:
             paper_lists.append(papers)
             diagnostics.append(provider_diagnostics)
 
+        patent_name = compound.name or query
         # KIPRIS prefers the original Korean query when the user typed Korean,
         # otherwise the resolved compound name.
-        kipris_word = query if contains_hangul(query) else (compound.name or query)
+        kipris_word = query if contains_hangul(query) else patent_name
 
+        # Patent items are accumulated in display/merge order: Google Patents
+        # (relevance-ranked) first, then KIPRIS, then SureChEMBL (recall-ordered).
+        # dedup_patents keeps the first-seen record per publication number, so a
+        # document found by Google wins over the same one from KIPRIS/SureChEMBL.
         patent_items: list[PatentItem] = []
         total_hits_parts: list[int] = []
-        if "surechembl" in selected_sources:
+
+        if "google_patents" in selected_sources:
             try:
-                sc_patents, sc_total, patent_diagnostics = self.surechembl.search_patents(
-                    smiles=compound.canonical_smiles,
-                    compound_name=compound.name or query,
-                    inchi_key=compound.inchi_key,
+                gp_patents, gp_total, gp_diagnostics = self.google_patents.search_patents(
+                    query=patent_name,
                     limit=limit,
                 )
             except Exception:
-                logger.exception("Patent provider 'surechembl' raised unexpectedly.")
-                sc_patents = []
-                sc_total = None
-                patent_diagnostics = ProviderDiagnostics(
-                    name="surechembl",
+                logger.exception("Patent provider 'google_patents' raised unexpectedly.")
+                gp_patents = []
+                gp_total = None
+                gp_diagnostics = ProviderDiagnostics(
+                    name="google_patents",
                     status="error",
                     message=PROVIDER_CALL_ERROR,
                 )
-            patent_items.extend(sc_patents)
-            if sc_total is not None:
-                total_hits_parts.append(sc_total)
-            diagnostics.append(patent_diagnostics)
+            patent_items.extend(gp_patents)
+            if gp_total is not None:
+                total_hits_parts.append(gp_total)
+            diagnostics.append(gp_diagnostics)
 
         if "kipris" in selected_sources:
             try:
@@ -318,12 +330,35 @@ class SearchPipeline:
                 total_hits_parts.append(kipris_total)
             diagnostics.append(kipris_diagnostics)
 
-        # Dedup across SureChEMBL + KIPRIS by publication number. Each provider
-        # already returns at most ``limit`` rows, so we do NOT re-cap the merged
-        # list to ``limit`` — that would let the first source (SureChEMBL) fill
-        # every slot and crowd KIPRIS out entirely. Keeping each source's
-        # contribution lets the 특허 tab show both global and Korean patents
-        # (the UI filters by source).
+        if "surechembl" in selected_sources:
+            try:
+                sc_patents, sc_total, patent_diagnostics = self.surechembl.search_patents(
+                    smiles=compound.canonical_smiles,
+                    compound_name=patent_name,
+                    inchi_key=compound.inchi_key,
+                    limit=limit,
+                )
+            except Exception:
+                logger.exception("Patent provider 'surechembl' raised unexpectedly.")
+                sc_patents = []
+                sc_total = None
+                patent_diagnostics = ProviderDiagnostics(
+                    name="surechembl",
+                    status="error",
+                    message=PROVIDER_CALL_ERROR,
+                )
+            patent_items.extend(sc_patents)
+            if sc_total is not None:
+                total_hits_parts.append(sc_total)
+            diagnostics.append(patent_diagnostics)
+
+        # Dedup across Google Patents + KIPRIS + SureChEMBL by publication number.
+        # Each provider already returns at most ``limit`` rows, so we do NOT
+        # re-cap the merged list to ``limit`` — that would let the first source
+        # fill every slot and crowd the others out entirely. Keeping each
+        # source's contribution lets the 특허 tab show global + Korean patents
+        # (the UI filters by source); first-seen-wins keeps Google's relevance
+        # ordering ahead of SureChEMBL's recall ordering for shared documents.
         patents = dedup_patents(patent_items)
         # patents_total_hits is the sum of each patent source's reported total;
         # None when no patent source reported a count (e.g. none selected).

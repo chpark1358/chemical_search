@@ -14,9 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from chemical_search.http_client import ProviderHttpError
 from chemical_search.models import UNTITLED_PAPER, UNTITLED_PATENT, HttpDiagnostics
 from chemical_search.providers import (
+    GOOGLE_PATENTS_USER_AGENT,
     MISSING_STEREO_WARNING,
     OPENALEX_ABSTRACT_MAX_CHARS,
     CrossrefProvider,
+    GooglePatentsProvider,
     OpenAlexProvider,
     PubChemProvider,
     SemanticScholarProvider,
@@ -245,6 +247,66 @@ SURECHEMBL_DOCUMENTS_EMPTY_FIXTURE: dict[str, Any] = {
 }
 
 
+# Realistic patents.google.com XHR shape: results.total_num_results plus a
+# relevance-ordered cluster[0].result[] of {patent: {...}} entries.
+GOOGLE_PATENTS_FIXTURE: dict[str, Any] = {
+    "results": {
+        "total_num_results": 12345,
+        "cluster": [
+            {
+                "result": [
+                    {
+                        "patent": {
+                            "publication_number": "US20100130542A1",
+                            # HTML entities (&hellip;) + <b> tags must be cleaned.
+                            "title": "Composition Comprising <b>Aspirin</b> and a &hellip;",
+                            "snippet": "A composition comprising aspirin&hellip;",
+                            "assignee": "The Curators Of The University Of Missouri",
+                            "inventor": "Jane Researcher",
+                            "priority_date": "2008-11-26",
+                            "filing_date": "2009-11-25",
+                            "publication_date": "2010-05-27",
+                            "grant_date": "",
+                            "pdf": "pdfs/US20100130542A1.pdf",
+                        }
+                    },
+                    {
+                        # No publication_date: must fall back to grant_date.
+                        # No assignee: stays None. Plain title (no entities).
+                        "patent": {
+                            "publication_number": "EP1234567B1",
+                            "title": "Aspirin formulation",
+                            "snippet": "An aspirin formulation.",
+                            "assignee": "",
+                            "inventor": "John Inventor",
+                            "priority_date": "2005-01-01",
+                            "filing_date": "2006-01-01",
+                            "publication_date": "",
+                            "grant_date": "2012-08-15",
+                            "pdf": "",
+                        }
+                    },
+                    {
+                        # No publication/grant: must fall back to filing_date.
+                        # Missing title entirely -> UNTITLED placeholder.
+                        "patent": {
+                            "publication_number": "JP2007123456A",
+                            "assignee": "Acme KK",
+                            "priority_date": "2004-02-02",
+                            "filing_date": "2007-03-03",
+                        }
+                    },
+                ]
+            }
+        ],
+    }
+}
+
+GOOGLE_PATENTS_EMPTY_FIXTURE: dict[str, Any] = {
+    "results": {"total_num_results": 0, "cluster": [{"result": []}]}
+}
+
+
 def http_diag() -> HttpDiagnostics:
     return HttpDiagnostics(latency_ms=5, cached=False, retry_count=0)
 
@@ -261,10 +323,14 @@ class FakeHttp:
         self.payloads = list(payloads)
         self.urls: list[str] = []
         self.methods: list[str] = []
+        self.headers: list[dict[str, str]] = []
 
-    def _next(self, method: str, url: str) -> tuple[dict[str, Any], HttpDiagnostics]:
+    def _next(
+        self, method: str, url: str, headers: dict[str, str] | None
+    ) -> tuple[dict[str, Any], HttpDiagnostics]:
         self.urls.append(url)
         self.methods.append(method)
+        self.headers.append(headers or {})
         item = self.payloads.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -278,7 +344,7 @@ class FakeHttp:
         cache_ttl_seconds: int = 0,
         retries: int = 0,
     ) -> tuple[dict[str, Any], HttpDiagnostics]:
-        return self._next("GET", url)
+        return self._next("GET", url, headers)
 
     def post_json(
         self,
@@ -289,7 +355,7 @@ class FakeHttp:
         cache_ttl_seconds: int = 0,
         retries: int = 0,
     ) -> tuple[dict[str, Any], HttpDiagnostics]:
-        return self._next("POST", url)
+        return self._next("POST", url, headers)
 
 
 class SemanticScholarTests(unittest.TestCase):
@@ -893,6 +959,107 @@ class SureChemblTests(unittest.TestCase):
 
         self.assertEqual(patents, [])
         self.assertEqual(diagnostics.status, "error")
+
+
+class GooglePatentsTests(unittest.TestCase):
+    def test_parses_relevance_ranked_patents_from_fixture(self):
+        http = FakeHttp([GOOGLE_PATENTS_FIXTURE])
+        provider = GooglePatentsProvider(http)
+
+        patents, total_hits, diagnostics = provider.search_patents(query="aspirin", limit=10)
+
+        self.assertEqual(diagnostics.status, "ok")
+        self.assertEqual(diagnostics.name, "google_patents")
+        self.assertEqual(total_hits, 12345)
+        self.assertEqual(len(patents), 3)
+
+        first = patents[0]
+        self.assertEqual(first.id, "US20100130542A1")
+        self.assertEqual(first.publication_number, "US20100130542A1")
+        # HTML tags stripped and entities decoded.
+        self.assertEqual(first.title, "Composition Comprising Aspirin and a …")
+        self.assertEqual(first.url, "https://patents.google.com/patent/US20100130542A1/en")
+        self.assertEqual(first.assignee, "The Curators Of The University Of Missouri")
+        # publication_date preferred.
+        self.assertEqual(first.date, "2010-05-27")
+        self.assertEqual(first.source, "google_patents")
+
+    def test_date_falls_back_to_grant_then_filing(self):
+        http = FakeHttp([GOOGLE_PATENTS_FIXTURE])
+        provider = GooglePatentsProvider(http)
+
+        patents, _, _ = provider.search_patents(query="aspirin", limit=10)
+
+        # Empty publication_date -> grant_date.
+        self.assertEqual(patents[1].date, "2012-08-15")
+        self.assertIsNone(patents[1].assignee)  # empty assignee string -> None
+        # No publication/grant -> filing_date.
+        self.assertEqual(patents[2].date, "2007-03-03")
+
+    def test_missing_title_uses_untitled_placeholder(self):
+        http = FakeHttp([GOOGLE_PATENTS_FIXTURE])
+        provider = GooglePatentsProvider(http)
+
+        patents, _, _ = provider.search_patents(query="aspirin", limit=10)
+
+        self.assertEqual(patents[2].title, UNTITLED_PATENT)
+
+    def test_request_wraps_query_and_sends_browser_user_agent(self):
+        http = FakeHttp([GOOGLE_PATENTS_FIXTURE])
+        provider = GooglePatentsProvider(http)
+
+        provider.search_patents(query="acetylsalicylic acid", limit=7)
+
+        url = http.urls[0]
+        self.assertIn("patents.google.com/xhr/query", url)
+        # The inner "q=...&num=..." string is URL-encoded as the outer url= value.
+        self.assertIn("url=q%3Dacetylsalicylic%2520acid%26num%3D7", url)
+        self.assertTrue(url.endswith("&exp="))
+        # A browser User-Agent header is required or Google returns 403.
+        self.assertEqual(http.headers[0]["User-Agent"], GOOGLE_PATENTS_USER_AGENT)
+
+    def test_empty_results_is_empty_status(self):
+        provider = GooglePatentsProvider(FakeHttp([GOOGLE_PATENTS_EMPTY_FIXTURE]))
+
+        patents, total_hits, diagnostics = provider.search_patents(query="aspirin", limit=10)
+
+        self.assertEqual(patents, [])
+        self.assertEqual(total_hits, 0)
+        self.assertEqual(diagnostics.status, "empty")
+
+    def test_missing_results_block_is_graceful_error(self):
+        # Google occasionally returns an unexpected shape (e.g. a parsed block
+        # page); the provider degrades to an "error" diagnostic, not a crash.
+        provider = GooglePatentsProvider(FakeHttp([{"unexpected": "shape"}]))
+
+        patents, total_hits, diagnostics = provider.search_patents(query="aspirin", limit=10)
+
+        self.assertEqual(patents, [])
+        self.assertIsNone(total_hits)
+        self.assertEqual(diagnostics.status, "error")
+
+    def test_blocked_datacenter_ip_403_maps_to_error(self):
+        # Google blocks datacenter IPs (e.g. the HF Space) with HTTP 403; this
+        # must surface as a graceful "error" so the patents tab still renders
+        # SureChEMBL/KIPRIS results.
+        error = ProviderHttpError("error", "HTTP 403", http_diag(), http_status=403)
+        provider = GooglePatentsProvider(FakeHttp([error]))
+
+        patents, total_hits, diagnostics = provider.search_patents(query="aspirin", limit=10)
+
+        self.assertEqual(patents, [])
+        self.assertIsNone(total_hits)
+        self.assertEqual(diagnostics.status, "error")
+
+    def test_rate_limit_maps_to_rate_limited_status(self):
+        error = ProviderHttpError("rate_limited", "HTTP 429", http_diag(), http_status=429)
+        provider = GooglePatentsProvider(FakeHttp([error]))
+
+        patents, total_hits, diagnostics = provider.search_patents(query="aspirin", limit=10)
+
+        self.assertEqual(patents, [])
+        self.assertIsNone(total_hits)
+        self.assertEqual(diagnostics.status, "rate_limited")
 
 
 if __name__ == "__main__":

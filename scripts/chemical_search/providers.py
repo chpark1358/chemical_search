@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 import os
 import re
@@ -29,6 +30,14 @@ CROSSREF_CACHE_TTL = 7 * 24 * 60 * 60
 OPENALEX_CACHE_TTL = 3 * 24 * 60 * 60
 SURECHEMBL_CACHE_TTL = 7 * 24 * 60 * 60
 KIPRIS_CACHE_TTL = 24 * 60 * 60
+GOOGLE_PATENTS_CACHE_TTL = 24 * 60 * 60
+
+# patents.google.com has no official API; its XHR endpoint returns 403 unless a
+# browser User-Agent is sent. This is a plain desktop Chrome UA.
+GOOGLE_PATENTS_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
 
 # Environment variable that gates the KIPRIS patent provider. When unset the
 # provider is inactive (see pipeline.PATENT_SOURCES / is_kipris_enabled).
@@ -545,6 +554,127 @@ class SureChemblProvider:
         if not text or text == _SURECHEMBL_NULL:
             return None
         return text
+
+    @staticmethod
+    def _int(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+            return int(value)
+        return None
+
+
+class GooglePatentsProvider:
+    """Google Patents search via the unofficial patents.google.com XHR endpoint.
+
+    Unlike SureChEMBL (docId-ordered recall), this is RELEVANCE-RANKED: results
+    come back in Google's relevance order for the resolved compound name. There
+    is no official API and no key; the endpoint requires a browser User-Agent
+    (without one Google returns 403). Google may also block datacenter IPs (e.g.
+    a hosted Space), so a 403/parse failure is surfaced as a graceful "error"
+    diagnostic rather than crashing the patents tab — SureChEMBL/KIPRIS still
+    populate it.
+
+    The outer ``url`` query parameter wraps the real query string
+    (``q=<name>&num=<limit>``), URL-encoded as a single value, mirroring how the
+    patents.google.com front-end calls its own backend.
+    """
+
+    name = "google_patents"
+    base_url = "https://patents.google.com/xhr/query"
+
+    def __init__(self, http: HttpClient):
+        self.http = http
+
+    def search_patents(
+        self,
+        *,
+        query: str,
+        limit: int,
+    ) -> tuple[list[PatentItem], int | None, ProviderDiagnostics]:
+        """Search Google Patents for ``query`` and return ``(patents, total, diag)``.
+
+        ``total`` is ``results.total_num_results``. Status is ok (results),
+        empty (0 results), rate_limited (HTTP 429), or error (403/other/parse).
+        """
+        inner = f"q={quote(query, safe='')}&num={limit}"
+        url = f"{self.base_url}?url={quote(inner, safe='')}&exp="
+        try:
+            data, http = self.http.get_json(
+                url,
+                headers={"User-Agent": GOOGLE_PATENTS_USER_AGENT},
+                cache_ttl_seconds=GOOGLE_PATENTS_CACHE_TTL,
+                retries=1,
+            )
+        except ProviderHttpError as exc:
+            return [], None, _error_diagnostics(self.name, exc)
+
+        results = data.get("results") if isinstance(data, dict) else None
+        if not isinstance(results, dict):
+            # Unexpected shape (e.g. Google served an HTML block page parsed as
+            # JSON, or a datacenter-IP refusal). Treat as a graceful error.
+            return [], None, ProviderDiagnostics.from_http(
+                self.name,
+                "error",
+                http,
+                message="Google Patents 응답을 해석할 수 없습니다.",
+            )
+
+        clusters = results.get("cluster") or []
+        rows: list[dict[str, Any]] = []
+        for cluster in clusters:
+            if isinstance(cluster, dict):
+                rows.extend(
+                    entry for entry in (cluster.get("result") or []) if isinstance(entry, dict)
+                )
+        patents = [self._patent(row) for row in rows]
+        total_hits = self._int(results.get("total_num_results"))
+        status = "ok" if patents else "empty"
+        return patents, total_hits, ProviderDiagnostics.from_http(self.name, status, http)
+
+    def _patent(self, row: dict[str, Any]) -> PatentItem:
+        patent = row.get("patent") if isinstance(row.get("patent"), dict) else {}
+        publication_number = str(patent.get("publication_number") or "")
+        # Prefer published/granted dates over filing/priority for the surfaced date.
+        date = (
+            self._clean(patent.get("publication_date"))
+            or self._clean(patent.get("grant_date"))
+            or self._clean(patent.get("filing_date"))
+            or self._clean(patent.get("priority_date"))
+        )
+        url = (
+            f"https://patents.google.com/patent/{publication_number}/en"
+            if publication_number
+            else None
+        )
+        return PatentItem(
+            id=publication_number or UNTITLED_PATENT,
+            publication_number=publication_number,
+            title=self._title(patent.get("title")),
+            url=url,
+            assignee=self._clean(patent.get("assignee")),
+            date=date,
+            source=self.name,
+        )
+
+    @staticmethod
+    def _title(value: Any) -> str:
+        """Strip HTML tags (e.g. ``<b>``) and decode entities (e.g. ``&hellip;``)
+        from the Google Patents title; fall back to the shared placeholder."""
+        if not value:
+            return UNTITLED_PATENT
+        text = _TAG_RE.sub("", str(value))
+        text = html.unescape(text).strip()
+        return text or UNTITLED_PATENT
+
+    @staticmethod
+    def _clean(value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
 
     @staticmethod
     def _int(value: Any) -> int | None:

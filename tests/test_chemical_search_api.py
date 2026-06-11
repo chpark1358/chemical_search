@@ -282,6 +282,22 @@ class SearchFlowTests(unittest.TestCase):
         self.assertEqual(pipeline.run_calls[0]["sources"], ["surechembl"])
         self.assertEqual(len(result["patents"]), 1)
 
+    def test_google_patents_source_selection_is_forwarded_to_pipeline(self):
+        pipeline = FakePipeline(
+            candidates=candidates()[:1], detected_type="name", patents=[patent()]
+        )
+        client = make_client(pipeline)
+
+        created = client.post(
+            "/api/searches",
+            json={"query": "aspirin", "sources": ["google_patents"]},
+        )
+        self.assertEqual(created.status_code, 200)
+
+        result = client.get(f"/api/searches/{created.json()['search_id']}").json()
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(pipeline.run_calls[0]["sources"], ["google_patents"])
+
     def test_zero_candidates_for_formula_is_failed_with_korean_error(self):
         client = make_client(FakePipeline(candidates=[], detected_type="formula"))
 
@@ -349,12 +365,29 @@ class ValidationTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
 
+    def test_google_patents_source_is_accepted(self):
+        response = self.client.post(
+            "/api/searches",
+            json={"query": "aspirin", "sources": ["google_patents"]},
+        )
+        self.assertEqual(response.status_code, 200)
+
     def test_all_four_sources_are_accepted(self):
         response = self.client.post(
             "/api/searches",
             json={
                 "query": "aspirin",
                 "sources": ["semantic_scholar", "crossref", "openalex", "surechembl"],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_all_patent_sources_are_accepted(self):
+        response = self.client.post(
+            "/api/searches",
+            json={
+                "query": "aspirin",
+                "sources": ["google_patents", "surechembl", "kipris"],
             },
         )
         self.assertEqual(response.status_code, 200)

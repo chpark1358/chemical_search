@@ -332,6 +332,15 @@ class FakeSureChembl:
         return [], None, ProviderDiagnostics(name=self.name, status="empty", latency_ms=1)
 
 
+class FakeGooglePatents:
+    name = "google_patents"
+
+    def search_patents(self, *, query, limit):
+        from chemical_search.models import ProviderDiagnostics
+
+        return [], None, ProviderDiagnostics(name=self.name, status="empty", latency_ms=1)
+
+
 class FakeKipris:
     name = "kipris"
 
@@ -371,6 +380,7 @@ def make_pipeline(kipris: FakeKipris) -> SearchPipeline:
         semantic_scholar=FakePaperProvider("semantic_scholar"),
         openalex=FakePaperProvider("openalex"),
         crossref=FakePaperProvider("crossref"),
+        google_patents=FakeGooglePatents(),
         surechembl=FakeSureChembl(),
         kipris=kipris,
     )
@@ -447,6 +457,7 @@ class KiprisPipelineTests(unittest.TestCase):
             semantic_scholar=FakePaperProvider("semantic_scholar"),
             openalex=FakePaperProvider("openalex"),
             crossref=FakePaperProvider("crossref"),
+            google_patents=FakeGooglePatents(),
             surechembl=SureChemblWithHits(),
             kipris=kipris,
         )

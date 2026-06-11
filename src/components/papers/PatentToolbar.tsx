@@ -17,6 +17,7 @@ export type PatentSourceFilter = "all" | PatentSourceName;
 export type PatentCountryFilter = "all" | PatentCountry;
 
 const SOURCE_LABELS: Record<PatentSourceName, string> = {
+  google_patents: "Google Patents",
   surechembl: "SureChEMBL",
   kipris: "KIPRIS"
 };

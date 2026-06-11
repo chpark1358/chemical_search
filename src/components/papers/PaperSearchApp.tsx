@@ -296,9 +296,12 @@ function PaperSearchAppInner() {
   }, [allPapers, effectiveSourceFilter, keyword]);
 
   // 결과에 실제로 존재하는 특허 출처/국가(필터 칩 노출 결정).
+  // Google Patents는 관련도 정렬 출처라 존재하면 칩을 맨 앞에 둔다.
   const availablePatentSources = useMemo(() => {
     const present = new Set(allPatents.map((patent) => patent.source));
-    return (["surechembl", "kipris"] as const).filter((source) => present.has(source));
+    return (["google_patents", "surechembl", "kipris"] as const).filter((source) =>
+      present.has(source)
+    );
   }, [allPatents]);
 
   const availablePatentCountries = useMemo(() => {

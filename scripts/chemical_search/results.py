@@ -53,8 +53,9 @@ def merge_papers(
 def dedup_patents(patents: list[PatentItem]) -> list[PatentItem]:
     """Drop patents sharing a publication number, preserving first-seen order.
 
-    Patents come from a single source (SureChEMBL) so there is no cross-source
-    merge; this only removes exact duplicate documents. Patents without a
+    Patents are merged across sources (Google Patents, KIPRIS, SureChEMBL), so
+    first-seen-wins determines which source represents a shared document; the
+    caller orders the input list to control that preference. Patents without a
     publication number are always kept.
     """
     seen: set[str] = set()

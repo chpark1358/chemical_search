@@ -50,6 +50,14 @@ const PROVIDERS_OK: Json[] = [
     message: null
   },
   {
+    name: "google_patents",
+    status: "ok",
+    latency_ms: 580,
+    cached: false,
+    retry_count: 0,
+    message: null
+  },
+  {
     name: "surechembl",
     status: "ok",
     latency_ms: 640,
@@ -68,6 +76,16 @@ const PROVIDERS_OK: Json[] = [
 ];
 
 const PATENTS: Json[] = [
+  // Google Patents는 관련도 정렬 출처라 항상 목록 맨 앞에 온다.
+  {
+    id: "US20100130542A1",
+    publication_number: "US20100130542A1",
+    title: "Aspirin formulation with enhanced bioavailability",
+    url: "https://patents.google.com/patent/US20100130542A1/en",
+    assignee: "Relevance Labs Inc",
+    date: "2010-05-27",
+    source: "google_patents"
+  },
   {
     id: "CN-102369480-A",
     publication_number: "CN102369480A",
@@ -313,6 +331,10 @@ test("직접 흐름: 검색 → running → done, 정렬 토글 동작", async (
   const kiprisChip = page.getByTestId("provider-chip-kipris");
   await expect(kiprisChip).toContainText("KIPRIS");
   await expect(kiprisChip).toContainText("1건");
+  // Google Patents는 관련도 정렬 특허 출처이며, source==="google_patents" 건수(1건)를 보여준다.
+  const googlePatentsChip = page.getByTestId("provider-chip-google_patents");
+  await expect(googlePatentsChip).toContainText("Google Patents");
+  await expect(googlePatentsChip).toContainText("1건");
   await expect(
     page.getByRole("link", { name: /Aspirin and cardiovascular outcomes/ })
   ).toBeVisible();
@@ -345,7 +367,7 @@ test("직접 흐름: 검색 → running → done, 정렬 토글 동작", async (
   // 결과 탭: 기본은 논문 탭이고 특허 탭에는 특허 건수가 표시된다.
   const patentTab = page.getByTestId("result-tab-patents");
   await expect(patentTab).toContainText("특허");
-  await expect(patentTab).toContainText("3");
+  await expect(patentTab).toContainText("4");
   await expect(page.getByTestId("result-tab-papers")).toHaveAttribute(
     "aria-selected",
     "true"
@@ -354,8 +376,9 @@ test("직접 흐름: 검색 → running → done, 정렬 토글 동작", async (
   await patentTab.click();
   const patentList = page.getByTestId("patent-list");
   const patentRows = patentList.getByRole("listitem");
-  await expect(patentRows).toHaveCount(3);
-  await expect(patentRows.first()).toContainText("CN102369480A");
+  await expect(patentRows).toHaveCount(4);
+  // Google Patents(관련도 정렬)가 입력 순서상 맨 앞이라 첫 행에 온다.
+  await expect(patentRows.first()).toContainText("US20100130542A1");
   const patentLink = page.getByRole("link", {
     name: /Aspirin sustained-release composition/
   });
@@ -365,9 +388,40 @@ test("직접 흐름: 검색 → running → done, 정렬 토글 동작", async (
     "https://patents.google.com/patent/CN102369480A/en"
   );
   await expect(patentLink).toHaveAttribute("target", "_blank");
-  // 특허 행에는 출처 배지가 표시된다: SureChEMBL 특허와 KIPRIS(한글 특허) 모두.
+  // 특허 행에는 출처 배지가 표시된다: Google Patents · SureChEMBL · KIPRIS(한글 특허) 모두.
+  await expect(
+    patentList.getByText("Google Patents", { exact: true }).first()
+  ).toBeVisible();
   await expect(patentList.getByText("SureChEMBL", { exact: true }).first()).toBeVisible();
   await expect(patentList.getByText("KIPRIS", { exact: true }).first()).toBeVisible();
+
+  // 특허 출처 필터: 결과에 3개 출처가 있으면 칩 그룹이 노출되고 Google Patents가 맨 앞이다.
+  const patentSourceFilter = page.getByRole("group", { name: "특허 출처 필터" });
+  await expect(patentSourceFilter).toBeVisible();
+  await expect(
+    patentSourceFilter.getByRole("button", { name: "Google Patents", exact: true })
+  ).toBeVisible();
+  await expect(
+    patentSourceFilter.getByRole("button", { name: "SureChEMBL", exact: true })
+  ).toBeVisible();
+  await expect(
+    patentSourceFilter.getByRole("button", { name: "KIPRIS", exact: true })
+  ).toBeVisible();
+  // Google Patents로 거르면 google_patents 특허(1건)만 남는다.
+  await patentSourceFilter
+    .getByRole("button", { name: "Google Patents", exact: true })
+    .click();
+  await expect(patentRows).toHaveCount(1);
+  await expect(patentRows.first()).toContainText("US20100130542A1");
+  await expect(
+    page.getByRole("link", { name: /Aspirin formulation with enhanced bioavailability/ })
+  ).toHaveAttribute(
+    "href",
+    "https://patents.google.com/patent/US20100130542A1/en"
+  );
+  // 전체로 복귀하면 4건이 다시 보인다.
+  await patentSourceFilter.getByRole("button", { name: "전체", exact: true }).click();
+  await expect(patentRows).toHaveCount(4);
   // KIPRIS 한글 특허 행이 렌더되고 외부 링크가 KIPRIS로 연결된다.
   const kiprisLink = page.getByRole("link", { name: /아스피린 서방성 조성물/ });
   await expect(kiprisLink).toBeVisible();
@@ -621,7 +675,7 @@ test("Stage 3: 공유 가능한 ?q= URL이 로드 시 자동 검색을 실행한
 
   // 특허 탭이 복원되어 특허 목록이 보인다(tab=patents).
   const patentRows = page.getByTestId("patent-list").getByRole("listitem");
-  await expect(patentRows).toHaveCount(3, { timeout: 15_000 });
+  await expect(patentRows).toHaveCount(4, { timeout: 15_000 });
   await expect(page.getByTestId("result-tab-patents")).toHaveAttribute(
     "aria-selected",
     "true"
