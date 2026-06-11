@@ -1,0 +1,22 @@
+# Render Blueprint for the FastAPI backend (https://render.com).
+# In Render: New → Blueprint → connect this repo. Render builds the Dockerfile
+# and injects $PORT. Set the secret env values in the dashboard (sync: false).
+# After it deploys, copy the service URL into Vercel's CHEMICAL_API_URL.
+services:
+  - type: web
+    name: chemical-search-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: CROSSREF_MAILTO
+        sync: false # 본인 이메일 (Crossref polite pool)
+      - key: OPENALEX_MAILTO
+        sync: false # 본인 이메일 (OpenAlex polite pool)
+      - key: KIPRIS_SERVICE_KEY
+        sync: false # KIPRIS Plus REST AccessKey (선택, 한국 특허)
+      - key: SEMANTIC_SCHOLAR_API_KEY
+        sync: false # 선택, 보통 미설정
+      - key: CHEMICAL_SEARCH_CACHE_DIR
+        value: /tmp/chemical-cache

@@ -1,0 +1,24 @@
+# The backend image only needs scripts/ + requirements. Keep everything else out.
+node_modules
+.next
+.next-playwright
+.git
+.venv-chemical
+output
+test-results
+tests
+src
+docs
+public
+*.md
+.env
+.env.*
+package.json
+package-lock.json
+next.config.ts
+tsconfig.json
+playwright.config.ts
+eslint.config.mjs
+postcss.config.mjs
+**/__pycache__
+**/*.pyc

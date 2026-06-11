@@ -52,6 +52,8 @@ python3.11 -m venv .venv-chemical
 
 참고: PowerShell 스크립트로 만든 venv는 `.venv-chemical/Scripts/python.exe`, bash로 만든 venv는 `.venv-chemical/bin/python`을 사용한다. 아래 명령은 Windows venv 기준이며, Linux venv에서는 `Scripts/python.exe`를 `bin/python`으로 바꾼다.
 
+> 배포(Vercel + 컨테이너 백엔드)는 [DEPLOYMENT.md](./DEPLOYMENT.md) 참고.
+
 ## 실행
 
 Python API와 Next.js 웹 서버를 각각 실행한다.
