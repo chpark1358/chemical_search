@@ -1,5 +1,41 @@
 # 개발 진행 로그
 
+## 2026-06-11: OpenAlex 논문 프로바이더 추가
+
+상태: 진행 중
+
+### 목적
+
+Semantic Scholar API key 신규 발급 중단(O-007)에 대응해 OpenAlex를 Crossref와 함께 주력 논문 소스로 추가하고, Semantic Scholar는 무인증 best-effort로 유지한다.
+
+### 진행 내용
+
+- OpenAlex 소스 추가 결정 기록 (D-013): API key 불필요, `mailto` 지정 시 polite pool 10 rps / 일 100k 요청
+- 유효 소스를 `semantic_scholar | crossref | openalex` 3개로 확장, `sources` 미지정 시 기본값은 3개 전체
+- 결과 병합(중복 제거) 우선순위를 `semantic_scholar > openalex > crossref`로 정의 (기존 citations/abstract/venue/doi/url/year backfill 유지)
+- `OPENALEX_MAILTO` 환경 변수 추가 (미설정 시 `CROSSREF_MAILTO` 사용, 둘 다 없으면 mailto 파라미터 생략)
+- O-007을 '완화'로 갱신: OpenAlex가 주력 소스를 대체, Semantic Scholar key 발급은 사실상 불가(무료 도메인·서드파티 앱 신청 중단)
+- `README.md`, `.env.example`, 진행 문서를 3개 논문 소스 기준으로 갱신
+
+### 변경 파일
+
+- `README.md`
+- `.env.example`
+- `docs/chemical-search-progress/current-status.md`
+- `docs/chemical-search-progress/decision-log.md`
+- `docs/chemical-search-progress/open-issues.md`
+- `docs/chemical-search-progress/progress-log.md`
+
+### 검증
+
+- 문서 정비 작업으로 코드 검증 없음. OpenAlex provider/pipeline/UI 구현의 lint/테스트 결과는 해당 작업 종료 시 기록한다.
+
+### 다음 작업
+
+1. `scripts/chemical_search` OpenAlex adapter 구현 (상태 분류 ok/empty/rate_limited/timeout/error, abstract_inverted_index 복원)
+2. `results.py` 병합 우선순위 `semantic_scholar > openalex > crossref` 반영과 테스트
+3. UI 소스 칩·필터에 OpenAlex 추가
+
 ## 2026-06-11: 논문 전용(papers-only) 피벗과 재설계 착수
 
 상태: 진행 중

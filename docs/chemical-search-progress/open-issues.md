@@ -47,22 +47,22 @@
 
 ### O-007: Semantic Scholar API key 필요 여부
 
-상태: 미해결
+상태: 완화 (OpenAlex 추가, D-013)
 
 현재 결과:
 
 - 인증 없는 요청에서 HTTP 429 발생
-- papers-only 피벗으로 Semantic Scholar가 핵심 provider 2개 중 하나가 되어 중요도가 올라갔다.
+- Semantic Scholar가 무료 도메인 이메일과 서드파티 앱의 API key 신규 발급을 중단해(2024-09 공식 X 공지, 2025년까지 승인 정체) key 발급은 사실상 불가능하다.
+- 2026-06-11 OpenAlex를 주력 논문 소스로 추가해(D-013) Semantic Scholar 의존도를 낮췄다. Semantic Scholar는 무인증 best-effort로 유지한다.
 
 확인 필요:
 
-- `SEMANTIC_SCHOLAR_API_KEY` 발급 여부
-- API key 없이 Crossref fallback만으로 MVP-1이 충분한지
-- retry/backoff 정책
+- best-effort 호출의 retry/backoff 정책 적정성
+- Semantic Scholar key 발급 정책 변경 여부 (재개 시 재검토)
 
 영향:
 
-논문 검색 품질과 안정성에 직접 영향이 있다.
+OpenAlex+Crossref가 주력 소스이므로 Semantic Scholar 429가 검색 가용성을 막지 않는다. Semantic Scholar 결과는 응답이 가능할 때만 병합 품질을 보강한다.
 
 ### O-008: 공개 provider rate limit과 재시도 정책
 
@@ -75,7 +75,7 @@
 - provider 실패를 partial 결과로 보존한다.
 - 성공 응답 file cache, 429/5xx/timeout retry, host 단위 요청 간격을 구현했다.
 - Crossref `mailto` 설정을 지원한다.
-- papers-only 피벗 후 대상 provider는 PubChem/Semantic Scholar/Crossref 3개다 (ChEMBL 제외).
+- papers-only 피벗 후 대상 provider는 PubChem/Semantic Scholar/Crossref/OpenAlex 4개다 (ChEMBL 제외, OpenAlex는 D-013으로 추가).
 
 확인 필요:
 

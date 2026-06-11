@@ -1,4 +1,4 @@
-"""Fixture-based parsing tests for the PubChem/Semantic Scholar/Crossref providers."""
+"""Fixture-based parsing tests for the PubChem/Semantic Scholar/OpenAlex/Crossref providers."""
 
 from __future__ import annotations
 
@@ -6,15 +6,18 @@ import sys
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from chemical_search.http_client import ProviderHttpError
-from chemical_search.models import HttpDiagnostics
+from chemical_search.models import UNTITLED_PAPER, HttpDiagnostics
 from chemical_search.providers import (
     MISSING_STEREO_WARNING,
+    OPENALEX_ABSTRACT_MAX_CHARS,
     CrossrefProvider,
+    OpenAlexProvider,
     PubChemProvider,
     SemanticScholarProvider,
 )
@@ -87,6 +90,48 @@ CROSSREF_EMPTY_FIXTURE: dict[str, Any] = {
     "message-type": "work-list",
     "message": {"total-results": 0, "items": []},
 }
+
+OPENALEX_FIXTURE: dict[str, Any] = {
+    "meta": {"count": 2, "page": 1, "per_page": 10},
+    "results": [
+        {
+            "id": "https://openalex.org/W2741809807",
+            "display_name": "Aspirin in the primary prevention of cardiovascular disease",
+            "publication_year": 2017,
+            "doi": "https://doi.org/10.1016/j.jacc.2017.03.001",
+            "cited_by_count": 321,
+            "authorships": [
+                {"author": {"id": "https://openalex.org/A1", "display_name": "Jane Roe"}},
+                {"author": {"id": "https://openalex.org/A2", "display_name": "John Doe"}},
+            ],
+            "primary_location": {
+                "source": {"display_name": "Journal of the American College of Cardiology"},
+                "landing_page_url": "https://www.sciencedirect.com/science/article/pii/S0735",
+            },
+            "abstract_inverted_index": {
+                "Aspirin": [0],
+                "irreversibly": [1],
+                "inhibits": [2],
+                "platelet": [3],
+                "cyclooxygenase.": [4],
+            },
+        },
+        {
+            # Missing-field case: null title/year/doi/citations, empty
+            # authorships, null primary_location and abstract_inverted_index.
+            "id": "https://openalex.org/W0000000000",
+            "display_name": None,
+            "publication_year": None,
+            "doi": None,
+            "cited_by_count": None,
+            "authorships": [],
+            "primary_location": None,
+            "abstract_inverted_index": None,
+        },
+    ],
+}
+
+OPENALEX_EMPTY_FIXTURE: dict[str, Any] = {"meta": {"count": 0}, "results": []}
 
 PUBCHEM_NAME_FIXTURE: dict[str, Any] = {
     "PropertyTable": {
@@ -192,6 +237,174 @@ class SemanticScholarTests(unittest.TestCase):
     def test_timeout_maps_to_timeout_status(self):
         error = ProviderHttpError("timeout", "timed out", http_diag())
         provider = SemanticScholarProvider(FakeHttp([error]))
+
+        _, diagnostics = provider.search_papers("aspirin", 10)
+
+        self.assertEqual(diagnostics.status, "timeout")
+
+
+class OpenAlexTests(unittest.TestCase):
+    def test_parses_papers_from_fixture(self):
+        provider = OpenAlexProvider(FakeHttp([OPENALEX_FIXTURE]))
+
+        papers, diagnostics = provider.search_papers("aspirin", 10)
+
+        self.assertEqual(diagnostics.status, "ok")
+        self.assertEqual(diagnostics.name, "openalex")
+        self.assertEqual(len(papers), 2)
+        first = papers[0]
+        self.assertEqual(first.id, "openalex:https://openalex.org/W2741809807")
+        self.assertEqual(
+            first.title, "Aspirin in the primary prevention of cardiovascular disease"
+        )
+        self.assertEqual(first.authors, ["Jane Roe", "John Doe"])
+        self.assertEqual(first.venue, "Journal of the American College of Cardiology")
+        self.assertEqual(first.year, 2017)
+        self.assertEqual(first.doi, "10.1016/j.jacc.2017.03.001")
+        self.assertEqual(first.url, "https://doi.org/10.1016/j.jacc.2017.03.001")
+        self.assertEqual(first.citations, 321)
+        self.assertEqual(first.abstract, "Aspirin irreversibly inhibits platelet cyclooxygenase.")
+        self.assertEqual(first.source, "openalex")
+
+    def test_missing_fields_become_none_or_defaults(self):
+        provider = OpenAlexProvider(FakeHttp([OPENALEX_FIXTURE]))
+
+        papers, _ = provider.search_papers("aspirin", 10)
+        sparse = papers[1]
+
+        self.assertEqual(sparse.title, UNTITLED_PAPER)
+        self.assertEqual(sparse.authors, [])
+        self.assertIsNone(sparse.venue)
+        self.assertIsNone(sparse.year)
+        self.assertIsNone(sparse.doi)
+        self.assertIsNone(sparse.citations)
+        self.assertIsNone(sparse.abstract)
+        # No DOI and a null primary_location fall back to the work id URL.
+        self.assertEqual(sparse.url, "https://openalex.org/W0000000000")
+
+    def test_doi_prefix_stripping_is_case_insensitive(self):
+        fixture = {
+            "meta": {"count": 1},
+            "results": [
+                {
+                    "id": "https://openalex.org/W1",
+                    "display_name": "Shouting DOI",
+                    "doi": "HTTPS://DOI.ORG/10.1000/UPPER.case",
+                }
+            ],
+        }
+        provider = OpenAlexProvider(FakeHttp([fixture]))
+
+        papers, _ = provider.search_papers("aspirin", 10)
+
+        self.assertEqual(papers[0].doi, "10.1000/UPPER.case")
+        self.assertEqual(papers[0].url, "https://doi.org/10.1000/UPPER.case")
+
+    def test_url_falls_back_to_landing_page_when_doi_missing(self):
+        fixture = {
+            "meta": {"count": 1},
+            "results": [
+                {
+                    "id": "https://openalex.org/W2",
+                    "display_name": "Landing page only",
+                    "primary_location": {
+                        "source": None,
+                        "landing_page_url": "https://example.org/landing",
+                    },
+                }
+            ],
+        }
+        provider = OpenAlexProvider(FakeHttp([fixture]))
+
+        papers, _ = provider.search_papers("aspirin", 10)
+
+        self.assertIsNone(papers[0].doi)
+        self.assertEqual(papers[0].url, "https://example.org/landing")
+        self.assertIsNone(papers[0].venue)
+
+    def test_abstract_reconstruction_orders_words_by_position(self):
+        fixture = {
+            "meta": {"count": 1},
+            "results": [
+                {
+                    "id": "https://openalex.org/W3",
+                    "display_name": "Inverted index",
+                    "abstract_inverted_index": {
+                        "the": [0, 3],
+                        "sat": [2],
+                        "mat.": [4],
+                        "cat": [1],
+                    },
+                }
+            ],
+        }
+        provider = OpenAlexProvider(FakeHttp([fixture]))
+
+        papers, _ = provider.search_papers("aspirin", 10)
+
+        self.assertEqual(papers[0].abstract, "the cat sat the mat.")
+
+    def test_abstract_is_capped(self):
+        fixture = {
+            "meta": {"count": 1},
+            "results": [
+                {
+                    "id": "https://openalex.org/W4",
+                    "display_name": "Very long abstract",
+                    "abstract_inverted_index": {"verbose": list(range(1000))},
+                }
+            ],
+        }
+        provider = OpenAlexProvider(FakeHttp([fixture]))
+
+        papers, _ = provider.search_papers("aspirin", 10)
+
+        self.assertEqual(len(papers[0].abstract), OPENALEX_ABSTRACT_MAX_CHARS)
+
+    def test_uses_search_and_per_page_params(self):
+        http = FakeHttp([OPENALEX_FIXTURE])
+        with patch.dict("os.environ", {}, clear=True):
+            OpenAlexProvider(http).search_papers("acetylsalicylic acid", 7)
+
+        self.assertIn("search=acetylsalicylic%20acid", http.urls[0])
+        self.assertIn("per-page=7", http.urls[0])
+        self.assertNotIn("mailto", http.urls[0])
+
+    def test_mailto_prefers_openalex_env_over_crossref(self):
+        http = FakeHttp([OPENALEX_FIXTURE])
+        env = {"OPENALEX_MAILTO": "openalex@example.org", "CROSSREF_MAILTO": "crossref@example.org"}
+        with patch.dict("os.environ", env, clear=True):
+            OpenAlexProvider(http).search_papers("aspirin", 10)
+
+        self.assertIn("mailto=openalex%40example.org", http.urls[0])
+
+    def test_mailto_falls_back_to_crossref_env(self):
+        http = FakeHttp([OPENALEX_FIXTURE])
+        with patch.dict("os.environ", {"CROSSREF_MAILTO": "crossref@example.org"}, clear=True):
+            OpenAlexProvider(http).search_papers("aspirin", 10)
+
+        self.assertIn("mailto=crossref%40example.org", http.urls[0])
+
+    def test_empty_response_is_empty_status(self):
+        provider = OpenAlexProvider(FakeHttp([OPENALEX_EMPTY_FIXTURE]))
+
+        papers, diagnostics = provider.search_papers("aspirin", 10)
+
+        self.assertEqual(papers, [])
+        self.assertEqual(diagnostics.status, "empty")
+
+    def test_rate_limit_maps_to_rate_limited_status(self):
+        error = ProviderHttpError("rate_limited", "HTTP 429", http_diag(), http_status=429)
+        provider = OpenAlexProvider(FakeHttp([error]))
+
+        papers, diagnostics = provider.search_papers("aspirin", 10)
+
+        self.assertEqual(papers, [])
+        self.assertEqual(diagnostics.status, "rate_limited")
+
+    def test_timeout_maps_to_timeout_status(self):
+        error = ProviderHttpError("timeout", "timed out", http_diag())
+        provider = OpenAlexProvider(FakeHttp([error]))
 
         _, diagnostics = provider.search_papers("aspirin", 10)
 

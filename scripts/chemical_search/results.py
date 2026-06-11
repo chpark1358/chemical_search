@@ -11,6 +11,9 @@ from .models import UNTITLED_PAPER, PaperItem
 
 VALID_SORTS = ("relevance", "citations", "year")
 
+# Duplicate-merge preference: the most metadata-rich provider record wins.
+SOURCE_PREFERENCE = ("semantic_scholar", "openalex", "crossref")
+
 
 def merge_papers(
     paper_lists: Iterable[list[PaperItem]],
@@ -22,8 +25,9 @@ def merge_papers(
     Duplicates are detected by lowercased DOI when both papers carry one,
     otherwise by normalized title (casefold, alphanumeric characters only);
     papers carrying the untitled placeholder never match by title.
-    On duplicates the Semantic Scholar record wins, with missing citations,
-    abstract, venue, DOI, URL, and year merged in from the other record.
+    On duplicates the preferred-source record wins (semantic_scholar >
+    openalex > crossref), with missing citations, abstract, venue, DOI, URL,
+    and year merged in from the other record.
     """
     if sort not in VALID_SORTS:
         raise ValueError(f"Unsupported sort '{sort}'. Expected one of {VALID_SORTS}.")
@@ -69,8 +73,15 @@ def _normalized_title(title: str) -> str:
     return "".join(char for char in title.casefold() if char.isalnum())
 
 
+def _source_rank(source: str) -> int:
+    try:
+        return SOURCE_PREFERENCE.index(source)
+    except ValueError:
+        return len(SOURCE_PREFERENCE)
+
+
 def _merge_pair(existing: PaperItem, incoming: PaperItem) -> PaperItem:
-    if incoming.source == "semantic_scholar" and existing.source != "semantic_scholar":
+    if _source_rank(incoming.source) < _source_rank(existing.source):
         preferred, other = deepcopy(incoming), existing
     else:
         preferred, other = existing, incoming

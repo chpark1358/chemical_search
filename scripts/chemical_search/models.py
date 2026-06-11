@@ -56,7 +56,7 @@ class CompoundInfo:
 
 @dataclass
 class PaperItem:
-    """A single academic paper from Semantic Scholar or Crossref."""
+    """A single academic paper from Semantic Scholar, OpenAlex, or Crossref."""
 
     id: str
     title: str

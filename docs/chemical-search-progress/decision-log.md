@@ -214,3 +214,20 @@ ideal-worldcup Next.js 앱(라우트, API, 관련 문서)을 저장소에서 제
 ### 영향
 
 `src/`는 Chemical Search UI만 남는다. `DATABASE_URL`, `STORAGE_*`, `ADMIN_SESSION_SECRET` 등 월드컵용 환경 변수는 `.env.example`에서 제거한다. 제거 직전 상태는 베이스라인 커밋 `1c45ee5`와 git 히스토리로 추적한다.
+
+## D-013: OpenAlex 논문 소스를 추가한다
+
+날짜: 2026-06-11
+상태: 확정
+
+### 결정
+
+OpenAlex(`https://api.openalex.org/works`)를 Crossref와 함께 주력 논문 소스로 추가한다. 유효 소스는 `semantic_scholar | crossref | openalex` 3개가 되고, `sources` 미지정 시 기본값은 3개 전체다. Semantic Scholar는 무인증 best-effort provider로 유지한다.
+
+### 이유
+
+Semantic Scholar가 무료 도메인 이메일과 서드파티 앱에 대한 API key 신규 발급을 중단해(2024-09 공식 X 공지, 2025년까지 승인 정체) 무인증 호출의 HTTP 429가 상시 발생한다(O-007). OpenAlex는 API key가 필요 없고, `mailto` 지정 시 polite pool로 10 rps / 일 100k 요청을 보장한다.
+
+### 영향
+
+provider adapter, 검색 파이프라인, UI 소스 칩·필터에 OpenAlex를 추가해야 한다. 결과 병합(중복 제거) 시 메타데이터 풍부도 기준 우선순위는 `semantic_scholar > openalex > crossref`로 정의하고, 기존 citations/abstract/venue/doi/url/year backfill 동작은 유지한다. 환경 변수 `OPENALEX_MAILTO`가 추가된다(미설정 시 `CROSSREF_MAILTO` 사용, 둘 다 없으면 mailto 파라미터 생략).

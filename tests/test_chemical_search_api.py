@@ -226,6 +226,20 @@ class SearchFlowTests(unittest.TestCase):
         self.assertIn("찾을 수 없습니다", body["error"])
         self.assertIsNotNone(body["completed_at"])
 
+    def test_openalex_source_selection_is_forwarded_to_pipeline(self):
+        pipeline = FakePipeline(candidates=candidates()[:1], detected_type="name")
+        client = make_client(pipeline)
+
+        created = client.post(
+            "/api/searches",
+            json={"query": "aspirin", "sources": ["openalex"]},
+        )
+        self.assertEqual(created.status_code, 200)
+
+        result = client.get(f"/api/searches/{created.json()['search_id']}").json()
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(pipeline.run_calls[0]["sources"], ["openalex"])
+
     def test_partial_status_is_reported(self):
         client = make_client(
             FakePipeline(candidates=candidates()[:1], detected_type="name", report_status="partial")
@@ -251,6 +265,13 @@ class ValidationTests(unittest.TestCase):
             json={"query": "aspirin", "sources": ["chembl"]},
         )
         self.assertEqual(response.status_code, 422)
+
+    def test_all_three_sources_are_accepted(self):
+        response = self.client.post(
+            "/api/searches",
+            json={"query": "aspirin", "sources": ["semantic_scholar", "crossref", "openalex"]},
+        )
+        self.assertEqual(response.status_code, 200)
 
     def test_query_over_2000_chars_is_rejected(self):
         response = self.client.post("/api/searches", json={"query": "C" * 2001})

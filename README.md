@@ -1,6 +1,6 @@
 # Chemical Paper Search
 
-화학물질 기반 논문 검색 서비스. 화학물질 식별 정보(이름, SMILES, InChI, InChIKey, 분자식)를 RDKit과 PubChem으로 정규화한 뒤, Semantic Scholar와 Crossref에서 관련 논문을 검색한다.
+화학물질 기반 논문 검색 서비스. 화학물질 식별 정보(이름, SMILES, InChI, InChIKey, 분자식)를 RDKit과 PubChem으로 정규화한 뒤, Semantic Scholar, Crossref, OpenAlex에서 관련 논문을 검색한다.
 
 - 검색 대상은 논문 전용(papers-only)이다. 특허 검색과 ChEMBL 구조 검색은 범위에서 제외됐다(D-010, `docs/chemical-search-progress/decision-log.md`).
 - 백엔드는 Python FastAPI, 프론트엔드는 Next.js다. Next.js rewrite(`/chemical-api`)로 같은 출처에서 FastAPI를 호출한다.
@@ -18,7 +18,7 @@
 
 - Node.js 20 이상, npm
 - Python 3.11
-- 외부 네트워크 접근: PubChem, Semantic Scholar, Crossref
+- 외부 네트워크 접근: PubChem, Semantic Scholar, Crossref, OpenAlex
 
 ## 설치
 
@@ -84,8 +84,9 @@ npm run dev
 
 | 변수 | 필수 | 설명 |
 |---|---|---|
-| `SEMANTIC_SCHOLAR_API_KEY` | 선택 | Semantic Scholar API key. 없으면 무인증 호출로 rate limit(HTTP 429)에 걸리기 쉽다. |
+| `SEMANTIC_SCHOLAR_API_KEY` | 선택 | Semantic Scholar API key. 신규 발급이 사실상 중단되어 보통 무인증 best-effort로 호출하며, 이때 rate limit(HTTP 429)에 걸리기 쉽다. |
 | `CROSSREF_MAILTO` | 권장 | Crossref polite pool 식별용 이메일 |
+| `OPENALEX_MAILTO` | 선택 | OpenAlex polite pool 식별용 이메일. 미설정 시 `CROSSREF_MAILTO`를 사용한다. |
 | `CHEMICAL_SEARCH_CACHE_DIR` | 선택 | provider 응답 캐시 디렉터리. 기본값 `output/chemical-search/cache` |
 | `CHEMICAL_API_URL` | 선택 | Next.js rewrite 대상 FastAPI 주소. 기본값 `http://127.0.0.1:8000` |
 

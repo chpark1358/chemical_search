@@ -5,11 +5,12 @@ import type { Paper, ProviderResult, ProviderStatus } from "@/lib/api";
 export const PROVIDER_LABELS: Record<string, string> = {
   semantic_scholar: "Semantic Scholar",
   crossref: "Crossref",
+  openalex: "OpenAlex",
   pubchem: "PubChem 해석"
 };
 
 /** 논문 출처 프로바이더. 그 외(예: pubchem)는 화합물 해석 진단 항목이다. */
-const PAPER_SOURCES = new Set<string>(["semantic_scholar", "crossref"]);
+const PAPER_SOURCES = new Set<string>(["semantic_scholar", "crossref", "openalex"]);
 
 const STATUS_LABELS: Record<ProviderStatus, string> = {
   ok: "정상",

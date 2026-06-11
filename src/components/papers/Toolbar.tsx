@@ -9,7 +9,8 @@ export type SourceFilter = "all" | SourceName;
 const FILTERS: ReadonlyArray<{ id: SourceFilter; label: string }> = [
   { id: "all", label: "전체" },
   { id: "semantic_scholar", label: "Semantic Scholar" },
-  { id: "crossref", label: "Crossref" }
+  { id: "crossref", label: "Crossref" },
+  { id: "openalex", label: "OpenAlex" }
 ];
 
 interface ToolbarProps {

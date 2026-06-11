@@ -78,10 +78,15 @@ class FakePaperProvider:
         )
 
 
-def make_pipeline(semantic_scholar: FakePaperProvider, crossref: FakePaperProvider) -> SearchPipeline:
+def make_pipeline(
+    semantic_scholar: FakePaperProvider,
+    crossref: FakePaperProvider,
+    openalex: FakePaperProvider | None = None,
+) -> SearchPipeline:
     return SearchPipeline(
         pubchem=ExplodingPubChem(),
         semantic_scholar=semantic_scholar,
+        openalex=openalex or FakePaperProvider("openalex", status="empty"),
         crossref=crossref,
     )
 
@@ -104,12 +109,13 @@ class PipelineStatusTests(unittest.TestCase):
         pipeline = make_pipeline(
             FakePaperProvider("semantic_scholar", [paper("semantic_scholar")]),
             FakePaperProvider("crossref", [paper("crossref", title="Other paper")]),
+            openalex=FakePaperProvider("openalex", [paper("openalex", title="Third paper")]),
         )
         report = pipeline.run_papers("aspirin", aspirin_candidate(), detected_type="name")
 
         self.assertEqual(report.status, "done")
         self.assertIsNone(report.error)
-        self.assertEqual(len(report.papers), 2)
+        self.assertEqual(len(report.papers), 3)
         self.assertEqual(report.compound.inchi_key, "BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
         self.assertEqual(report.compound.cid, 2244)
 
@@ -127,6 +133,7 @@ class PipelineStatusTests(unittest.TestCase):
         pipeline = make_pipeline(
             FakePaperProvider("semantic_scholar", status="timeout"),
             FakePaperProvider("crossref", status="error"),
+            openalex=FakePaperProvider("openalex", status="rate_limited"),
         )
         report = pipeline.run_papers("aspirin", aspirin_candidate())
 
@@ -193,27 +200,48 @@ class PipelineBehaviorTests(unittest.TestCase):
 
         self.assertIn("입체화학 정보가 없는 SMILES로 정규화되었습니다.", report.compound.warnings)
 
-    def test_sources_none_queries_both_providers(self):
+    def test_sources_none_queries_all_three_providers(self):
         semantic_scholar = FakePaperProvider("semantic_scholar", [paper("semantic_scholar")])
         crossref = FakePaperProvider("crossref", [paper("crossref", title="Other")])
-        pipeline = make_pipeline(semantic_scholar, crossref)
+        openalex = FakePaperProvider("openalex", [paper("openalex", title="Third")])
+        pipeline = make_pipeline(semantic_scholar, crossref, openalex=openalex)
 
         report = pipeline.run_papers("aspirin", aspirin_candidate(), sources=None)
 
         self.assertEqual(len(semantic_scholar.calls), 1)
+        self.assertEqual(len(openalex.calls), 1)
         self.assertEqual(len(crossref.calls), 1)
-        self.assertEqual({item.name for item in report.providers}, {"semantic_scholar", "crossref"})
+        self.assertEqual(
+            {item.name for item in report.providers},
+            {"semantic_scholar", "openalex", "crossref"},
+        )
 
-    def test_sources_subset_skips_other_provider(self):
+    def test_sources_subset_skips_other_providers(self):
         semantic_scholar = FakePaperProvider("semantic_scholar", [paper("semantic_scholar")])
         crossref = FakePaperProvider("crossref", [paper("crossref")])
-        pipeline = make_pipeline(semantic_scholar, crossref)
+        openalex = FakePaperProvider("openalex", [paper("openalex")])
+        pipeline = make_pipeline(semantic_scholar, crossref, openalex=openalex)
 
         report = pipeline.run_papers("aspirin", aspirin_candidate(), sources=["crossref"])
 
         self.assertEqual(semantic_scholar.calls, [])
+        self.assertEqual(openalex.calls, [])
         self.assertEqual(len(crossref.calls), 1)
         self.assertEqual([item.name for item in report.providers], ["crossref"])
+
+    def test_sources_openalex_only_queries_only_openalex(self):
+        semantic_scholar = FakePaperProvider("semantic_scholar", [paper("semantic_scholar")])
+        crossref = FakePaperProvider("crossref", [paper("crossref")])
+        openalex = FakePaperProvider("openalex", [paper("openalex", title="OpenAlex paper")])
+        pipeline = make_pipeline(semantic_scholar, crossref, openalex=openalex)
+
+        report = pipeline.run_papers("aspirin", aspirin_candidate(), sources=["openalex"])
+
+        self.assertEqual(semantic_scholar.calls, [])
+        self.assertEqual(crossref.calls, [])
+        self.assertEqual(openalex.calls, ["Aspirin"])
+        self.assertEqual([item.name for item in report.providers], ["openalex"])
+        self.assertEqual([item.title for item in report.papers], ["OpenAlex paper"])
 
     def test_invalid_source_raises_value_error(self):
         pipeline = make_pipeline(

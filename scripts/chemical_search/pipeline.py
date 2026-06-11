@@ -1,8 +1,8 @@
 """Papers-only search orchestration.
 
 Resolves a chemical input into PubChem candidates, normalizes the selected
-candidate with RDKit, and searches Semantic Scholar + Crossref for academic
-papers about the compound.
+candidate with RDKit, and searches Semantic Scholar + OpenAlex + Crossref for
+academic papers about the compound.
 """
 
 from __future__ import annotations
@@ -21,13 +21,13 @@ from .models import (
     SearchReport,
 )
 from .normalize import detect_input_type, normalize_structure
-from .providers import CrossrefProvider, PubChemProvider, SemanticScholarProvider
+from .providers import CrossrefProvider, OpenAlexProvider, PubChemProvider, SemanticScholarProvider
 from .results import merge_papers
 
 
 logger = logging.getLogger(__name__)
 
-PAPER_SOURCES = ("semantic_scholar", "crossref")
+PAPER_SOURCES = ("semantic_scholar", "openalex", "crossref")
 HARD_ERROR_STATUSES = {"rate_limited", "timeout", "error"}
 
 ALL_PROVIDERS_FAILED_ERROR = "논문 검색 제공자에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요."
@@ -40,15 +40,17 @@ class SearchPipeline:
         *,
         pubchem: PubChemProvider | None = None,
         semantic_scholar: SemanticScholarProvider | None = None,
+        openalex: OpenAlexProvider | None = None,
         crossref: CrossrefProvider | None = None,
         cache_dir: Path | None = None,
         cache_enabled: bool = True,
     ):
         http: HttpClient | None = None
-        if pubchem is None or semantic_scholar is None or crossref is None:
+        if pubchem is None or semantic_scholar is None or openalex is None or crossref is None:
             http = HttpClient(timeout_seconds=10, cache_dir=cache_dir, cache_enabled=cache_enabled)
         self.pubchem = pubchem or PubChemProvider(http)
         self.semantic_scholar = semantic_scholar or SemanticScholarProvider(http)
+        self.openalex = openalex or OpenAlexProvider(http)
         self.crossref = crossref or CrossrefProvider(http)
 
     def resolve_candidates(
@@ -88,6 +90,7 @@ class SearchPipeline:
         diagnostics: list[ProviderDiagnostics] = []
         providers = (
             ("semantic_scholar", self.semantic_scholar),
+            ("openalex", self.openalex),
             ("crossref", self.crossref),
         )
         for name, provider in providers:

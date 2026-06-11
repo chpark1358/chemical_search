@@ -20,7 +20,7 @@
 
 - 입력 감지(name/SMILES/InChI/InChIKey/formula)와 RDKit 구조 정규화
 - PubChem 후보 resolver와 candidate selection 흐름
-- Semantic Scholar/Crossref 논문 adapter
+- 논문 adapter: Semantic Scholar/Crossref에 2026-06-11 OpenAlex 추가(D-013). 유효 소스는 `semantic_scholar | crossref | openalex` 3개이며 Semantic Scholar는 무인증 best-effort로 유지
 - provider cache/retry/throttle과 partial result 처리
 - FastAPI normalize/search/candidate selection/result/export 엔드포인트 (record 스키마는 papers-only로 변경 중)
 - CSV/Markdown/JSON export
@@ -40,6 +40,7 @@
 - 2026-06-11: 월드컵 앱 제거 커밋 `9cd47e2` 생성
 - 2026-06-11: papers-only 피벗 결정 기록 (D-010, D-011, D-012)
 - 2026-06-11: README/.env.example/AGENTS.md/진행 문서를 새 스코프 기준으로 정비
+- 2026-06-11: OpenAlex 논문 소스 추가 결정 기록 (D-013)과 O-007 완화, 문서를 3개 논문 소스 기준으로 갱신
 
 ## 현재 단계
 
@@ -53,7 +54,8 @@
 - `pubchem_name_lookup`: ok
 - `pubchem_formula_lookup`: ok
 - `crossref_search`: ok
-- `semantic_scholar_search`: partial, HTTP 429로 API key 필요 가능성
+- `semantic_scholar_search`: partial, 무인증 HTTP 429. key 신규 발급이 사실상 중단되어 best-effort로 유지 (O-007 완화, D-013)
+- `openalex_search`: 미검증 — provider 구현 후 결과를 기록한다
 - `provider_cache`: ok, 동일 검색의 두 번째 요청이 cache hit로 처리됨
 - `quality_fixture`: ok, 정규화 10/10 통과
 - papers-only 재설계(백엔드 스키마 변경, 루트 UI)의 검증 결과는 아직 없음 — 재작업 완료 후 기록한다
@@ -74,5 +76,5 @@
 1. FastAPI papers-only 계약 구현/검증 (`partial_failed` → `partial`, ChEMBL/threshold 파라미터 제거)
 2. 루트 라우트 Linear 스타일 UI 구현 및 브라우저 검증
 3. `httpx2` 미사용 의존성 제거 (O-011)
-4. Semantic Scholar API key 발급 결정 (O-007)
+4. OpenAlex provider 구현/검증과 병합 우선순위 `semantic_scholar > openalex > crossref` 반영 (D-013, O-007 완화)
 5. 검색 상태 영속 저장소(PostgreSQL/Redis) 설계 (O-009)

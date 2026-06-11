@@ -38,6 +38,14 @@ const PROVIDERS_OK: Json[] = [
     cached: true,
     retry_count: 0,
     message: null
+  },
+  {
+    name: "openalex",
+    status: "ok",
+    latency_ms: 500,
+    cached: false,
+    retry_count: 0,
+    message: null
   }
 ];
 
@@ -67,6 +75,19 @@ const PAPERS: Json[] = [
     abstract: null,
     source: "crossref",
     score: 0.41
+  },
+  {
+    id: "https://openalex.org/W3",
+    title: "Acetylsalicylic acid pharmacokinetics",
+    authors: ["D. Choi"],
+    venue: "Br J Clin Pharmacol",
+    year: 2021,
+    doi: "10.1000/aspirin.3",
+    url: "https://doi.org/10.1000/aspirin.3",
+    citations: 87,
+    abstract: "Aspirin pharmacokinetics across populations.",
+    source: "openalex",
+    score: 0.62
   }
 ];
 
@@ -175,7 +196,7 @@ test("직접 흐름: 검색 → running → done, 정렬 토글 동작", async (
   await submitQuery(page, "aspirin");
 
   const rows = page.getByTestId("paper-list").getByRole("listitem");
-  await expect(rows).toHaveCount(2, { timeout: 15_000 });
+  await expect(rows).toHaveCount(3, { timeout: 15_000 });
 
   // pubchem 진단 칩: "PubChem 해석"으로 표기되고 논문 건수("0건")는 표시하지 않는다.
   const pubchemChip = page.getByTestId("provider-chip-pubchem");
@@ -184,11 +205,17 @@ test("직접 흐름: 검색 → running → done, 정렬 토글 동작", async (
   await expect(pubchemChip).not.toContainText("0건");
   // 논문 출처 칩은 건수를 유지한다.
   await expect(page.getByTestId("provider-chip-semantic_scholar")).toContainText("1건");
+  const openalexChip = page.getByTestId("provider-chip-openalex");
+  await expect(openalexChip).toContainText("OpenAlex");
+  await expect(openalexChip).toContainText("1건");
   await expect(
     page.getByRole("link", { name: /Aspirin and cardiovascular outcomes/ })
   ).toBeVisible();
   await expect(
     page.getByRole("link", { name: /Salicylate chemistry revisited/ })
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: /Acetylsalicylic acid pharmacokinetics/ })
   ).toBeVisible();
 
   // 관련도 정렬(기본): p1(score 0.95)이 첫 행
@@ -197,6 +224,18 @@ test("직접 흐름: 검색 → running → done, 정렬 토글 동작", async (
   // 연도 정렬로 토글: p2(2024)가 첫 행
   await page.getByLabel("정렬 기준").selectOption("year");
   await expect(rows.first()).toContainText("Salicylate chemistry revisited");
+
+  // OpenAlex 출처 필터: openalex 논문만 남는다.
+  await page.getByRole("button", { name: "OpenAlex", exact: true }).click();
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText("Acetylsalicylic acid pharmacokinetics");
+  await expect(
+    page.getByRole("link", { name: /Aspirin and cardiovascular outcomes/ })
+  ).toHaveCount(0);
+
+  // 전체 필터로 복귀하면 모든 논문이 다시 보인다.
+  await page.getByRole("button", { name: "전체", exact: true }).click();
+  await expect(rows).toHaveCount(3);
 });
 
 test("후보 선택 흐름: needs_candidate_selection → 선택 → done", async ({ page }) => {

@@ -18,7 +18,7 @@ export type InputType =
   | "inchi_key"
   | "formula";
 
-export type SourceName = "semantic_scholar" | "crossref";
+export type SourceName = "semantic_scholar" | "crossref" | "openalex";
 
 export type SortKey = "relevance" | "citations" | "year";
 

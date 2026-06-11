@@ -35,7 +35,7 @@ from .rendering import render_csv, render_json, render_markdown
 
 logger = logging.getLogger(__name__)
 
-PaperSource = Literal["semantic_scholar", "crossref"]
+PaperSource = Literal["semantic_scholar", "crossref", "openalex"]
 InputType = Literal["auto", "name", "smiles", "inchi", "inchi_key", "formula"]
 SortOrder = Literal["relevance", "citations", "year"]
 

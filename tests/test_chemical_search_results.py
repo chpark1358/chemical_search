@@ -77,6 +77,75 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(result.venue, "J. Chem")
         self.assertEqual(result.abstract, "Crossref abstract")
 
+    def test_openalex_record_is_preferred_over_crossref_and_enriched(self):
+        crossref = paper(
+            "crossref",
+            doi="10.2/y",
+            title="Crossref title",
+            citations=55,
+            venue="J. Org. Chem",
+            abstract="Crossref abstract",
+        )
+        openalex = paper(
+            "openalex",
+            doi="10.2/Y",
+            title="OpenAlex title",
+            citations=None,
+            venue=None,
+            abstract=None,
+        )
+
+        merged = merge_papers([[crossref], [openalex]])
+
+        self.assertEqual(len(merged), 1)
+        result = merged[0]
+        self.assertEqual(result.source, "openalex")
+        self.assertEqual(result.title, "OpenAlex title")
+        self.assertEqual(result.citations, 55)
+        self.assertEqual(result.venue, "J. Org. Chem")
+        self.assertEqual(result.abstract, "Crossref abstract")
+
+    def test_openalex_record_loses_to_semantic_scholar(self):
+        openalex = paper(
+            "openalex",
+            doi="10.3/z",
+            title="OpenAlex title",
+            citations=None,
+            abstract="OpenAlex abstract",
+        )
+        semantic = paper(
+            "semantic_scholar",
+            doi="10.3/Z",
+            title="Semantic title",
+            citations=12,
+            abstract=None,
+        )
+
+        merged = merge_papers([[openalex], [semantic]])
+
+        self.assertEqual(len(merged), 1)
+        result = merged[0]
+        self.assertEqual(result.source, "semantic_scholar")
+        self.assertEqual(result.title, "Semantic title")
+        self.assertEqual(result.citations, 12)
+        self.assertEqual(result.abstract, "OpenAlex abstract")
+
+    def test_three_source_duplicate_keeps_semantic_scholar(self):
+        doi = "10.4/w"
+        merged = merge_papers(
+            [
+                [paper("crossref", doi=doi, title="Crossref title", venue="J. Chem")],
+                [paper("openalex", doi=doi, title="OpenAlex title", abstract="Recovered abstract")],
+                [paper("semantic_scholar", doi=doi, title="Semantic title")],
+            ]
+        )
+
+        self.assertEqual(len(merged), 1)
+        result = merged[0]
+        self.assertEqual(result.source, "semantic_scholar")
+        self.assertEqual(result.venue, "J. Chem")
+        self.assertEqual(result.abstract, "Recovered abstract")
+
     def test_different_dois_with_same_title_are_not_merged(self):
         merged = merge_papers(
             [

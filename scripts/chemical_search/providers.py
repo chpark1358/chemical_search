@@ -1,4 +1,4 @@
-"""PubChem compound resolution and Semantic Scholar / Crossref paper search."""
+"""PubChem compound resolution and Semantic Scholar / OpenAlex / Crossref paper search."""
 
 from __future__ import annotations
 
@@ -14,6 +14,10 @@ from .models import UNTITLED_PAPER, CompoundCandidate, PaperItem, ProviderDiagno
 PUBCHEM_CACHE_TTL = 7 * 24 * 60 * 60
 SEMANTIC_SCHOLAR_CACHE_TTL = 3 * 24 * 60 * 60
 CROSSREF_CACHE_TTL = 7 * 24 * 60 * 60
+OPENALEX_CACHE_TTL = 3 * 24 * 60 * 60
+
+# Reconstructed OpenAlex abstracts are capped to keep payloads bounded.
+OPENALEX_ABSTRACT_MAX_CHARS = 2500
 
 MISSING_STEREO_WARNING = "입체화학 정보가 없는 SMILES로 정규화되었습니다."
 
@@ -28,6 +32,7 @@ _SMILES_PRIORITY: tuple[tuple[str, bool], ...] = (
 )
 
 _TAG_RE = re.compile(r"<[^>]+>")
+_DOI_URL_PREFIX_RE = re.compile(r"^https?://doi\.org/", re.IGNORECASE)
 
 
 def _error_diagnostics(name: str, exc: ProviderHttpError) -> ProviderDiagnostics:
@@ -168,6 +173,85 @@ class SemanticScholarProvider:
             abstract=row.get("abstract") or None,
             source=self.name,
         )
+
+
+class OpenAlexProvider:
+    name = "openalex"
+
+    def __init__(self, http: HttpClient):
+        self.http = http
+
+    def search_papers(self, query: str, limit: int) -> tuple[list[PaperItem], ProviderDiagnostics]:
+        url = f"https://api.openalex.org/works?search={quote(query)}&per-page={limit}"
+        if mailto := os.getenv("OPENALEX_MAILTO") or os.getenv("CROSSREF_MAILTO"):
+            url += f"&mailto={quote(mailto)}"
+        try:
+            data, http = self.http.get_json(
+                url,
+                cache_ttl_seconds=OPENALEX_CACHE_TTL,
+                retries=1,
+            )
+            papers = [self._paper(row) for row in data.get("results") or []]
+            status = "ok" if papers else "empty"
+            return papers, ProviderDiagnostics.from_http(self.name, status, http)
+        except ProviderHttpError as exc:
+            return [], _error_diagnostics(self.name, exc)
+
+    def _paper(self, row: dict[str, Any]) -> PaperItem:
+        work_id = row.get("id")
+        doi = self._doi(row.get("doi"))
+        primary_location = row.get("primary_location") or {}
+        source = primary_location.get("source") or {}
+        url = (
+            f"https://doi.org/{doi}"
+            if doi
+            else primary_location.get("landing_page_url") or work_id
+        )
+        title = row.get("display_name") or UNTITLED_PAPER
+        return PaperItem(
+            id=f"openalex:{work_id or doi or title}",
+            title=title,
+            authors=self._authors(row.get("authorships") or []),
+            venue=source.get("display_name") or None,
+            year=row.get("publication_year"),
+            doi=doi,
+            url=url,
+            citations=row.get("cited_by_count"),
+            abstract=self._abstract(row.get("abstract_inverted_index")),
+            source=self.name,
+        )
+
+    @staticmethod
+    def _doi(value: str | None) -> str | None:
+        """Strip the ``https://doi.org/`` prefix (case-insensitive) off the full DOI URL."""
+        if not value:
+            return None
+        return _DOI_URL_PREFIX_RE.sub("", value) or None
+
+    @staticmethod
+    def _authors(rows: list[dict[str, Any]]) -> list[str]:
+        authors: list[str] = []
+        for row in rows:
+            name = (row.get("author") or {}).get("display_name")
+            if name:
+                authors.append(name)
+        return authors
+
+    @staticmethod
+    def _abstract(inverted_index: dict[str, list[int]] | None) -> str | None:
+        """Reconstruct the abstract from OpenAlex's {word: [positions]} inverted index."""
+        if not inverted_index:
+            return None
+        positioned_words: list[tuple[int, str]] = []
+        for word, positions in inverted_index.items():
+            for position in positions or []:
+                if isinstance(position, int):
+                    positioned_words.append((position, word))
+        if not positioned_words:
+            return None
+        positioned_words.sort()
+        text = " ".join(word for _, word in positioned_words)
+        return text[:OPENALEX_ABSTRACT_MAX_CHARS] or None
 
 
 class CrossrefProvider:
