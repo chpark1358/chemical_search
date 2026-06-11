@@ -30,6 +30,35 @@ function sortPapers(papers: Paper[], sort: SortKey): Paper[] {
   return copy;
 }
 
+/** 대소문자를 무시하고 keyword가 들어간 항목만 남기는 클라이언트 키워드 필터. */
+function matchesKeyword(fields: Array<string | null>, keyword: string): boolean {
+  const term = keyword.trim().toLowerCase();
+  if (!term) return true;
+  return fields.some((field) => field !== null && field.toLowerCase().includes(term));
+}
+
+/** 특허 탭용 키워드 입력 바(논문 탭 Toolbar의 키워드 입력과 같은 스타일). */
+function PatentKeywordBar({
+  keyword,
+  onKeywordChange
+}: {
+  keyword: string;
+  onKeywordChange: (value: string) => void;
+}) {
+  return (
+    <div className="flex justify-end">
+      <input
+        aria-label="키워드로 특허 거르기"
+        className="h-8 w-48 rounded-lg border border-hairline bg-surface-1 px-2.5 text-sm text-ink transition-colors duration-150 placeholder:text-ink-tertiary hover:border-hairline-strong focus:border-hairline-strong focus:outline-2 focus:outline-primary/50"
+        onChange={(event) => onKeywordChange(event.target.value)}
+        placeholder="제목·공개번호·출원인 거르기"
+        type="search"
+        value={keyword}
+      />
+    </div>
+  );
+}
+
 function liveMessage(phase: SearchPhase, candidateCount: number, paperCount: number) {
   switch (phase) {
     case "creating":
@@ -57,6 +86,7 @@ export default function PaperSearchApp() {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("relevance");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
+  const [keyword, setKeyword] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [activeTab, setActiveTab] = useState<ResultTab>("papers");
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -73,19 +103,35 @@ export default function PaperSearchApp() {
     if (!isIdle) searchInputRef.current?.focus();
   }, [isIdle]);
 
-  const visiblePapers = useMemo(() => {
-    const papers = record?.papers ?? [];
-    const filtered =
-      sourceFilter === "all"
-        ? papers
-        : papers.filter((paper) => paper.source === sourceFilter);
-    return sortPapers(filtered, sort);
-  }, [record, sort, sourceFilter]);
+  const allPapers: Paper[] = useMemo(() => record?.papers ?? [], [record]);
+  const allPatents: Patent[] = useMemo(() => record?.patents ?? [], [record]);
 
-  const patents: Patent[] = useMemo(() => record?.patents ?? [], [record]);
+  // 파이프라인: 출처 필터 → 키워드 필터(제목/저자/저널) → 정렬.
+  const visiblePapers = useMemo(() => {
+    const bySource =
+      sourceFilter === "all"
+        ? allPapers
+        : allPapers.filter((paper) => paper.source === sourceFilter);
+    const byKeyword = bySource.filter((paper) =>
+      matchesKeyword([paper.title, paper.authors.join(" "), paper.venue], keyword)
+    );
+    return sortPapers(byKeyword, sort);
+  }, [allPapers, sort, sourceFilter, keyword]);
+
+  // 특허는 정렬/출처 필터가 없고 키워드 필터(제목/공개번호/출원인)만 적용한다.
+  const visiblePatents = useMemo(
+    () =>
+      allPatents.filter((patent) =>
+        matchesKeyword(
+          [patent.title, patent.publication_number, patent.assignee],
+          keyword
+        )
+      ),
+    [allPatents, keyword]
+  );
 
   // 키보드 화살표/Enter 내비게이션은 현재 탭의 항목 목록을 대상으로 한다.
-  const navItems = activeTab === "papers" ? visiblePapers : patents;
+  const navItems = activeTab === "papers" ? visiblePapers : visiblePatents;
 
   const failedProviders = useMemo(
     () =>
@@ -142,6 +188,7 @@ export default function PaperSearchApp() {
   function handleSubmit(value: string) {
     setSort("relevance");
     setSourceFilter("all");
+    setKeyword("");
     setSelectedIndex(-1);
     setActiveTab("papers");
     submit(value);
@@ -168,6 +215,19 @@ export default function PaperSearchApp() {
   function handleSourceFilterChange(next: SourceFilter) {
     setSelectedIndex(-1);
     setSourceFilter(next);
+  }
+
+  // 키워드 필터가 바뀌면 키보드 선택을 초기화한다 (행 목록이 달라지므로).
+  function handleKeywordChange(next: string) {
+    setSelectedIndex(-1);
+    setKeyword(next);
+  }
+
+  // 키워드/출처 필터를 모두 초기화한다(필터로 결과가 모두 숨었을 때 사용).
+  function handleResetFilters() {
+    setSelectedIndex(-1);
+    setKeyword("");
+    setSourceFilter("all");
   }
 
   const announcement = liveMessage(
@@ -247,7 +307,7 @@ export default function PaperSearchApp() {
                 {record.compound ? <CompoundCard compound={record.compound} /> : null}
                 <ProviderChips
                   papers={record.papers}
-                  patents={patents}
+                  patents={allPatents}
                   providers={record.providers}
                 />
                 {phase === "partial" ? (
@@ -257,12 +317,14 @@ export default function PaperSearchApp() {
                   active={activeTab}
                   onChange={handleTabChange}
                   paperCount={record.papers.length}
-                  patentCount={patents.length}
+                  patentCount={allPatents.length}
                 />
                 {activeTab === "papers" ? (
                   <>
                     <Toolbar
                       count={visiblePapers.length}
+                      keyword={keyword}
+                      onKeywordChange={handleKeywordChange}
                       onSortChange={handleSortChange}
                       onSourceFilterChange={handleSourceFilterChange}
                       searchId={record.search_id}
@@ -271,18 +333,29 @@ export default function PaperSearchApp() {
                       total={record.papers.length}
                     />
                     <PaperList
+                      filtered={allPapers.length > 0}
+                      highlight={record.compound?.name ?? ""}
+                      onResetFilters={handleResetFilters}
                       onSelect={setSelectedIndex}
                       papers={visiblePapers}
                       selectedIndex={selectedIndex}
                     />
                   </>
                 ) : (
-                  <PatentList
-                    onSelect={setSelectedIndex}
-                    patents={patents}
-                    selectedIndex={selectedIndex}
-                    totalHits={record.patents_total_hits}
-                  />
+                  <>
+                    <PatentKeywordBar
+                      keyword={keyword}
+                      onKeywordChange={handleKeywordChange}
+                    />
+                    <PatentList
+                      filtered={allPatents.length > 0}
+                      onResetFilters={handleResetFilters}
+                      onSelect={setSelectedIndex}
+                      patents={visiblePatents}
+                      selectedIndex={selectedIndex}
+                      totalHits={record.patents_total_hits}
+                    />
+                  </>
                 )}
                 {navItems.length ? (
                   <p className="font-mono text-[11px] text-ink-tertiary">

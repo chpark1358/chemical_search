@@ -109,6 +109,18 @@
   }
 }
 
+/* 모션 민감 사용자: 진행바 슬라이드/시머/스크롤/전환 애니메이션을 모두 끈다. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* Subtle loading shimmer for skeleton rows */
 @utility skeleton-shimmer {
   background: linear-gradient(

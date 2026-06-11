@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react";
 
 import { isSafeUrl, type Patent } from "@/lib/api";
 
+import CopyButton from "./CopyButton";
 import { providerLabel } from "./ProviderChips";
 
 interface PatentRowProps {
@@ -13,17 +14,21 @@ interface PatentRowProps {
   onSelect: () => void;
 }
 
-/** 외부 링크 호스트로 출처 라벨을 추정한다. 알 수 없으면 일반 라벨을 반환한다. */
-function externalLinkLabel(url: string | null): string | null {
-  if (!url) return null;
+/**
+ * 외부 링크 호스트로 명시적 라벨을 만든다("KIPRIS에서 보기" / "Google Patents에서 보기").
+ * KIPRIS 특허는 Google Patents 또는 KIPRIS 링크를 가질 수 있어 호스트 기반 분기가 필요하다.
+ * 알 수 없으면 일반 라벨("특허 원문 보기")을 반환한다.
+ */
+function externalLinkLabel(url: string | null): string {
+  if (!url) return "특허 원문 보기";
   try {
     const host = new URL(url).hostname;
-    if (host.includes("patents.google.com")) return "Google Patents";
-    if (host.includes("kipris.or.kr")) return "KIPRIS";
+    if (host.includes("patents.google.com")) return "Google Patents에서 보기";
+    if (host.includes("kipris.or.kr")) return "KIPRIS에서 보기";
   } catch {
-    return "특허 보기";
+    return "특허 원문 보기";
   }
-  return "특허 보기";
+  return "특허 원문 보기";
 }
 
 export default function PatentRow({ patent, selected, onSelect }: PatentRowProps) {
@@ -34,19 +39,12 @@ export default function PatentRow({ patent, selected, onSelect }: PatentRowProps
   }, [selected]);
 
   const safeUrl = isSafeUrl(patent.url) ? patent.url : null;
-  // 외부 링크 라벨: URL 호스트로 출처를 추정한다(Google Patents / KIPRIS),
-  // 알 수 없으면 일반 라벨("특허 보기")을 쓴다. KIPRIS 특허는 Google Patents 또는
-  // KIPRIS 링크를 가질 수 있으므로 호스트 기반 분기가 필요하다.
   const linkLabel = externalLinkLabel(safeUrl);
-  // 모노 메타 라인: 공개번호 · 출원인 · 공개일 (있는 항목만).
-  const metaParts = [patent.publication_number, patent.assignee, patent.date].filter(
-    (part): part is string => Boolean(part)
-  );
 
   return (
     <article
       // scroll-mt는 스티키 헤더+검색바(~120px) 아래로 행이 숨지 않게 한다.
-      className={`relative scroll-mb-4 scroll-mt-[120px] px-4 py-3 transition-colors duration-150 ${
+      className={`group/row relative scroll-mb-4 scroll-mt-[120px] px-4 py-3 transition-colors duration-150 ${
         selected ? "bg-surface-2" : "hover:bg-surface-2"
       }`}
       onClick={onSelect}
@@ -75,18 +73,44 @@ export default function PatentRow({ patent, selected, onSelect }: PatentRowProps
           </span>
         )}
         <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] text-ink-tertiary">
-          {metaParts.map((part, index) => (
-            <span className="max-w-72 truncate" key={`${part}-${index}`}>
-              {part}
+          <span className="inline-flex items-center gap-1">
+            <span className="max-w-72 truncate">{patent.publication_number}</span>
+            {/* 호버 시 노출되는 복사 버튼(공개번호). 포커스 시에도 보이게 한다. */}
+            <span className="opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 focus-within:opacity-100">
+              <CopyButton
+                className="inline-flex shrink-0 items-center rounded p-0.5 text-ink-subtle transition-colors duration-150 hover:bg-surface-3 hover:text-ink"
+                label="공개번호"
+                value={patent.publication_number}
+              />
             </span>
-          ))}
+          </span>
+          {patent.assignee ? (
+            <span className="inline-flex items-center gap-1">
+              <span className="max-w-72 truncate">{patent.assignee}</span>
+              <span className="opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 focus-within:opacity-100">
+                <CopyButton
+                  className="inline-flex shrink-0 items-center rounded p-0.5 text-ink-subtle transition-colors duration-150 hover:bg-surface-3 hover:text-ink"
+                  label="출원인"
+                  value={patent.assignee}
+                />
+              </span>
+            </span>
+          ) : null}
+          {patent.date ? <span>{patent.date}</span> : null}
+          {/* 출처 배지(데이터 소스). 링크 호스트 라벨과 중복되지 않도록 링크는 별도 라벨로 둔다. */}
           <span className="rounded-full border border-hairline px-2 py-px text-ink-subtle">
             {providerLabel(patent.source)}
           </span>
-          {linkLabel ? (
-            <span className="rounded-full border border-hairline px-2 py-px text-ink-subtle">
+          {safeUrl ? (
+            <a
+              className="rounded-full border border-hairline px-2 py-px text-ink-subtle transition-colors duration-150 hover:border-hairline-strong hover:text-ink-muted"
+              href={safeUrl}
+              onClick={(event) => event.stopPropagation()}
+              rel="noreferrer"
+              target="_blank"
+            >
               {linkLabel}
-            </span>
+            </a>
           ) : null}
         </p>
       </div>

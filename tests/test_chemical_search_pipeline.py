@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -14,7 +15,32 @@ from chemical_search.models import (
     ProviderDiagnostics,
 )
 from chemical_search.normalize import detect_input_type, normalize_structure
-from chemical_search.pipeline import SearchPipeline
+from chemical_search.pipeline import SearchPipeline, default_sources
+from chemical_search.providers import (
+    KIPRIS_SERVICE_KEY_ENV,
+    SEMANTIC_SCHOLAR_API_KEY_ENV,
+)
+
+
+# Most behavior tests below predate source-gating and assume Semantic Scholar
+# runs in the DEFAULT set (so the S2 fake provider is queried when sources=None).
+# S2 is now only in defaults when its API key is set, so we set a dummy key for
+# the whole module. Gating tests (DefaultSourcesGatingTests) override the env
+# explicitly via patch.dict so they assert the real key-gated behavior.
+_module_env = None
+
+
+def setUpModule() -> None:
+    global _module_env
+    _module_env = patch.dict(
+        "os.environ", {SEMANTIC_SCHOLAR_API_KEY_ENV: "test-s2-key"}
+    )
+    _module_env.start()
+
+
+def tearDownModule() -> None:
+    if _module_env is not None:
+        _module_env.stop()
 
 
 def aspirin_candidate() -> CompoundCandidate:
@@ -410,6 +436,94 @@ class PipelineBehaviorTests(unittest.TestCase):
         self.assertEqual(report.providers[0].name, "pubchem")
         # Resolution diagnostics must not affect paper status derivation.
         self.assertEqual(report.status, "done")
+
+
+class DefaultSourcesGatingTests(unittest.TestCase):
+    """Semantic Scholar is key-gated in the DEFAULT source set.
+
+    Unauthenticated S2 reliably 429s, so without SEMANTIC_SCHOLAR_API_KEY it is
+    absent from default_sources(); OpenAlex + Crossref + SureChEMBL stay always
+    on. These tests clear the environment so neither S2 nor KIPRIS leak in from
+    a real key, then toggle each key explicitly.
+    """
+
+    def test_semantic_scholar_excluded_without_key(self):
+        with patch.dict("os.environ", {}, clear=True):
+            sources = default_sources()
+        self.assertNotIn("semantic_scholar", sources)
+        # The always-on sources remain present.
+        self.assertIn("openalex", sources)
+        self.assertIn("crossref", sources)
+        self.assertIn("surechembl", sources)
+        # KIPRIS is also key-gated and absent without its key.
+        self.assertNotIn("kipris", sources)
+        self.assertEqual(set(sources), {"openalex", "crossref", "surechembl"})
+
+    def test_blank_s2_key_counts_as_unset(self):
+        with patch.dict(
+            "os.environ", {SEMANTIC_SCHOLAR_API_KEY_ENV: "   "}, clear=True
+        ):
+            sources = default_sources()
+        self.assertNotIn("semantic_scholar", sources)
+
+    def test_semantic_scholar_included_with_key(self):
+        with patch.dict(
+            "os.environ", {SEMANTIC_SCHOLAR_API_KEY_ENV: "s2-key"}, clear=True
+        ):
+            sources = default_sources()
+        self.assertIn("semantic_scholar", sources)
+        self.assertIn("openalex", sources)
+        self.assertIn("crossref", sources)
+        self.assertIn("surechembl", sources)
+        self.assertNotIn("kipris", sources)
+
+    def test_both_s2_and_kipris_keys_set_includes_both(self):
+        with patch.dict(
+            "os.environ",
+            {
+                SEMANTIC_SCHOLAR_API_KEY_ENV: "s2-key",
+                KIPRIS_SERVICE_KEY_ENV: "kipris-key",
+            },
+            clear=True,
+        ):
+            sources = default_sources()
+        self.assertEqual(
+            set(sources),
+            {"semantic_scholar", "openalex", "crossref", "surechembl", "kipris"},
+        )
+
+    def test_default_sources_none_without_s2_key_skips_semantic_scholar(self):
+        # End-to-end through the pipeline: sources=None with no S2 key must not
+        # query the S2 provider nor list it in providers[].
+        semantic_scholar = FakePaperProvider("semantic_scholar", [paper("semantic_scholar")])
+        crossref = FakePaperProvider("crossref", [paper("crossref")])
+        openalex = FakePaperProvider("openalex", [paper("openalex")])
+        pipeline = make_pipeline(semantic_scholar, crossref, openalex=openalex)
+
+        with patch.dict("os.environ", {}, clear=True):
+            report = pipeline.run_papers("aspirin", aspirin_candidate(), sources=None)
+
+        self.assertEqual(semantic_scholar.calls, [])
+        self.assertNotIn("semantic_scholar", {item.name for item in report.providers})
+        self.assertEqual(
+            {item.name for item in report.providers},
+            {"openalex", "crossref", "surechembl"},
+        )
+
+    def test_explicit_semantic_scholar_runs_even_without_key(self):
+        # S2 remains a valid EXPLICIT source: sources=["semantic_scholar"] runs
+        # it (the caller's choice) even when no key is configured.
+        semantic_scholar = FakePaperProvider("semantic_scholar", [paper("semantic_scholar")])
+        crossref = FakePaperProvider("crossref", [paper("crossref")])
+        pipeline = make_pipeline(semantic_scholar, crossref)
+
+        with patch.dict("os.environ", {}, clear=True):
+            report = pipeline.run_papers(
+                "aspirin", aspirin_candidate(), sources=["semantic_scholar"]
+            )
+
+        self.assertEqual(len(semantic_scholar.calls), 1)
+        self.assertEqual([item.name for item in report.providers], ["semantic_scholar"])
 
 
 if __name__ == "__main__":

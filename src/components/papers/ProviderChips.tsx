@@ -33,6 +33,20 @@ export function isProviderFailure(status: ProviderStatus): boolean {
   return status === "rate_limited" || status === "timeout" || status === "error";
 }
 
+/**
+ * 상태별 칩 스타일. ok=success 틴트, empty=중립(muted), 실패(rate_limited/timeout/error)=danger 틴트.
+ * 실패한 출처를 한눈에 스캔할 수 있게 색으로 구분한다. 토큰(--color-success/--color-danger)만 사용한다.
+ */
+function chipTone(status: ProviderStatus): string {
+  if (status === "ok") {
+    return "border-success/30 bg-success/5 text-ink-muted";
+  }
+  if (status === "empty") {
+    return "border-hairline bg-surface-1 text-ink-subtle";
+  }
+  return "border-danger/40 bg-danger/10 text-ink-muted";
+}
+
 function StatusIcon({ status }: { status: ProviderStatus }) {
   if (status === "ok") {
     return <Check aria-hidden="true" className="size-3 text-success" />;
@@ -84,7 +98,7 @@ export default function ProviderChips({
               : "완료";
         return (
           <span
-            className="inline-flex items-center gap-1.5 rounded-full border border-hairline bg-surface-1 py-1 pl-2.5 pr-3 text-xs text-ink-muted"
+            className={`inline-flex items-center gap-1.5 rounded-full border py-1 pl-2.5 pr-3 text-xs ${chipTone(provider.status)}`}
             data-testid={`provider-chip-${provider.name}`}
             key={provider.name}
             title={provider.message ?? undefined}

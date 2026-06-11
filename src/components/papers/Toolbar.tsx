@@ -18,9 +18,11 @@ interface ToolbarProps {
   total: number;
   sort: SortKey;
   sourceFilter: SourceFilter;
+  keyword: string;
   searchId: string;
   onSortChange: (sort: SortKey) => void;
   onSourceFilterChange: (filter: SourceFilter) => void;
+  onKeywordChange: (keyword: string) => void;
 }
 
 export default function Toolbar({
@@ -28,9 +30,11 @@ export default function Toolbar({
   total,
   sort,
   sourceFilter,
+  keyword,
   searchId,
   onSortChange,
-  onSourceFilterChange
+  onSourceFilterChange,
+  onKeywordChange
 }: ToolbarProps) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
@@ -63,6 +67,14 @@ export default function Toolbar({
         </div>
       </div>
       <div className="flex items-center gap-2">
+        <input
+          aria-label="키워드로 결과 거르기"
+          className="h-8 w-40 rounded-lg border border-hairline bg-surface-1 px-2.5 text-sm text-ink transition-colors duration-150 placeholder:text-ink-tertiary hover:border-hairline-strong focus:border-hairline-strong focus:outline-2 focus:outline-primary/50"
+          onChange={(event) => onKeywordChange(event.target.value)}
+          placeholder="제목·저자·저널 거르기"
+          type="search"
+          value={keyword}
+        />
         <label className="flex items-center gap-2 text-xs text-ink-subtle">
           정렬
           <select

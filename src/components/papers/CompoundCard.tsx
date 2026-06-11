@@ -1,30 +1,8 @@
 "use client";
 
-import { Check, Copy, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-
 import type { CompoundInfo } from "@/lib/api";
 
-/** http LAN 등 navigator.clipboard가 없는 환경을 위한 execCommand 폴백. */
-function legacyCopy(value: string): boolean {
-  const textarea = document.createElement("textarea");
-  textarea.value = value;
-  textarea.setAttribute("readonly", "");
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  let ok = false;
-  try {
-    ok = document.execCommand("copy");
-  } catch {
-    ok = false;
-  }
-  textarea.remove();
-  return ok;
-}
-
-type CopyResult = "idle" | "copied" | "failed";
+import CopyButton from "./CopyButton";
 
 interface CopyFieldProps {
   label: string;
@@ -32,50 +10,11 @@ interface CopyFieldProps {
 }
 
 function CopyField({ label, value }: CopyFieldProps) {
-  const [copyResult, setCopyResult] = useState<CopyResult>("idle");
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (timerRef.current !== null) clearTimeout(timerRef.current);
-    };
-  }, []);
-
-  async function copy() {
-    let ok = false;
-    if (navigator.clipboard) {
-      try {
-        await navigator.clipboard.writeText(value);
-        ok = true;
-      } catch {
-        ok = false;
-      }
-    }
-    if (!ok) ok = legacyCopy(value);
-    setCopyResult(ok ? "copied" : "failed");
-    if (timerRef.current !== null) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => setCopyResult("idle"), 1500);
-  }
-
   return (
     <span className="inline-flex min-w-0 items-center gap-1.5">
       <span className="shrink-0 text-xs text-ink-tertiary">{label}</span>
       <span className="truncate font-mono text-xs text-ink-muted">{value}</span>
-      <button
-        aria-label={copyResult === "failed" ? `${label} 복사 실패` : `${label} 복사`}
-        className="shrink-0 rounded p-1 text-ink-subtle transition-colors duration-150 hover:bg-surface-2 hover:text-ink"
-        onClick={() => void copy()}
-        title={copyResult === "failed" ? "복사 실패" : undefined}
-        type="button"
-      >
-        {copyResult === "copied" ? (
-          <Check aria-hidden="true" className="size-3 text-success" />
-        ) : copyResult === "failed" ? (
-          <X aria-hidden="true" className="size-3 text-danger" />
-        ) : (
-          <Copy aria-hidden="true" className="size-3" />
-        )}
-      </button>
+      <CopyButton label={label} value={value} />
     </span>
   );
 }

@@ -1,8 +1,8 @@
 """Papers-only search orchestration.
 
 Resolves a chemical input into PubChem candidates, normalizes the selected
-candidate with RDKit, and searches Semantic Scholar + OpenAlex + Crossref for
-academic papers about the compound.
+candidate with RDKit, and searches OpenAlex + Crossref (plus Semantic Scholar
+when its API key is set) for academic papers about the compound.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from .providers import (
     SemanticScholarProvider,
     SureChemblProvider,
     is_kipris_enabled,
+    is_semantic_scholar_enabled,
 )
 from .results import dedup_patents, merge_papers
 from .wikidata import contains_hangul, resolve_korean_name
@@ -37,7 +38,13 @@ from .wikidata import contains_hangul, resolve_korean_name
 
 logger = logging.getLogger(__name__)
 
+# "semantic_scholar" is a paper source like openalex/crossref but, because
+# unauthenticated S2 is aggressively rate-limited, it is only in the DEFAULT
+# set when its API key is configured (see is_semantic_scholar_enabled). It is
+# always a *valid* source; default_sources() decides whether it runs by default.
 PAPER_SOURCES = ("semantic_scholar", "openalex", "crossref")
+# Paper sources that are always on by default (no key required).
+DEFAULT_PAPER_SOURCES = ("openalex", "crossref")
 # "kipris" is a patent source like "surechembl" but is only active when its
 # service key is configured (see is_kipris_enabled). It is always a *valid*
 # source; default_sources() decides whether it runs by default.
@@ -53,11 +60,20 @@ KOREAN_RESOLVED_WARNING = (
 def default_sources() -> tuple[str, ...]:
     """The sources used when the caller does not specify any.
 
-    KIPRIS is included only when its service key is set so that, with no key,
-    it is absent from providers[]/patents[] (not an error)."""
+    OpenAlex + Crossref (papers) and SureChEMBL (patents) are always on.
+    Semantic Scholar is included only when its API key is set (without it, S2 is
+    unauthenticated and reliably 429s — see is_semantic_scholar_enabled), and
+    KIPRIS only when its service key is set (see is_kipris_enabled). Gated
+    sources absent from the default set are simply not queried — not an error,
+    so they never appear in providers[]/patents[]."""
+    sources: list[str] = []
+    if is_semantic_scholar_enabled():
+        sources.append("semantic_scholar")
+    sources.extend(DEFAULT_PAPER_SOURCES)
+    sources.append("surechembl")
     if is_kipris_enabled():
-        return ALL_SOURCES
-    return (*PAPER_SOURCES, "surechembl")
+        sources.append("kipris")
+    return tuple(sources)
 
 ALL_PROVIDERS_FAILED_ERROR = "논문 및 특허 검색 제공자에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요."
 PROVIDER_CALL_ERROR = "제공자 호출 중 오류가 발생했습니다."
@@ -172,9 +188,10 @@ class SearchPipeline:
         """Run the paper and patent search for an already-selected candidate.
 
         The candidate is used directly; candidates are never re-fetched here.
-        Papers come from Semantic Scholar / OpenAlex / Crossref and patents
-        from SureChEMBL plus (when its key is set) KIPRIS; the two result types
-        are reported separately. SureChEMBL and KIPRIS patents are merged into
+        Papers come from OpenAlex / Crossref plus (when its key is set, or when
+        explicitly requested) Semantic Scholar, and patents from SureChEMBL plus
+        (when its key is set) KIPRIS; the two result types are reported
+        separately. SureChEMBL and KIPRIS patents are merged into
         a single ``patents`` list, deduplicated by publication number across
         both sources, and their ``totalCount`` contributions are summed into
         ``patents_total_hits``.
@@ -281,9 +298,10 @@ class SearchPipeline:
 
     @staticmethod
     def _validate_sources(sources: Sequence[str] | None) -> set[str]:
-        # No explicit sources => the conditional default set. KIPRIS is only in
-        # the default set when its service key is configured, so with no key it
-        # never runs by default (and so is absent from providers[]/patents[]).
+        # No explicit sources => the conditional default set. Semantic Scholar
+        # and KIPRIS are only in the default set when their respective keys are
+        # configured, so with no key they never run by default (and so are
+        # absent from providers[]/patents[]).
         if sources is None:
             return set(default_sources())
         selected = set(sources)
@@ -297,6 +315,10 @@ class SearchPipeline:
         # and never appears in providers[]/patents[].
         if "kipris" in selected and not is_kipris_enabled():
             selected.discard("kipris")
+        # Note: "semantic_scholar" is NOT dropped without a key. Unlike KIPRIS
+        # (which has no usable unauthenticated mode), an explicit
+        # sources=["semantic_scholar"] still runs — it just likely rate-limits.
+        # That is the caller's explicit choice; only the DEFAULT set gates it.
         return selected
 
     @staticmethod

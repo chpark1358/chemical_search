@@ -34,6 +34,12 @@ KIPRIS_CACHE_TTL = 24 * 60 * 60
 # provider is inactive (see pipeline.PATENT_SOURCES / is_kipris_enabled).
 KIPRIS_SERVICE_KEY_ENV = "KIPRIS_SERVICE_KEY"
 
+# Environment variable that gates the Semantic Scholar paper provider in the
+# DEFAULT source set. Unauthenticated S2 requests are aggressively rate-limited
+# (HTTP 429), so without a key S2 is omitted from default_sources() rather than
+# cluttering results with a hard error (see is_semantic_scholar_enabled).
+SEMANTIC_SCHOLAR_API_KEY_ENV = "SEMANTIC_SCHOLAR_API_KEY"
+
 # SureChEMBL encodes a JSON null as the literal string "null"; treat it as None.
 _SURECHEMBL_NULL = "null"
 
@@ -185,7 +191,7 @@ class SemanticScholarProvider:
             f"query={quote(query)}&limit={limit}&fields={self.fields}"
         )
         headers: dict[str, str] = {}
-        if api_key := os.getenv("SEMANTIC_SCHOLAR_API_KEY"):
+        if api_key := (os.getenv(SEMANTIC_SCHOLAR_API_KEY_ENV) or "").strip():
             headers["x-api-key"] = api_key
         try:
             data, http = self.http.get_json(
@@ -559,6 +565,18 @@ def is_kipris_enabled() -> bool:
     value counts as unset.
     """
     return bool((os.getenv(KIPRIS_SERVICE_KEY_ENV) or "").strip())
+
+
+def is_semantic_scholar_enabled() -> bool:
+    """Semantic Scholar is only in the DEFAULT source set when its key is set.
+
+    Unauthenticated S2 calls are aggressively rate-limited (HTTP 429), which
+    forces a "partial" status and clutters the UI. So without a key S2 is absent
+    from default_sources() and never runs by default. It remains a *valid*
+    explicit source value (sources=["semantic_scholar"] still runs it — the
+    caller's choice). A blank/whitespace-only value counts as unset.
+    """
+    return bool((os.getenv(SEMANTIC_SCHOLAR_API_KEY_ENV) or "").strip())
 
 
 class KiprisProvider:
