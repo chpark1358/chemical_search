@@ -24,6 +24,10 @@ async function proxy(request: Request, path: string[]): Promise<Response> {
   if (contentType) headers.set("content-type", contentType);
   const accept = request.headers.get("accept");
   if (accept) headers.set("accept", accept);
+  // When the backend is a private host (e.g. a private Hugging Face Space),
+  // authenticate server-side with a token the browser never sees.
+  const apiToken = process.env.CHEMICAL_API_TOKEN;
+  if (apiToken) headers.set("authorization", `Bearer ${apiToken}`);
 
   const method = request.method;
   const body =
