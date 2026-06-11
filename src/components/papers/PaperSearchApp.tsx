@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { isSafeUrl, type Paper, type Patent, type SortKey } from "@/lib/api";
+import { foldPapers, paperKey, patentKey, type FoldedPaper } from "@/lib/papers";
+import { parsePatentCountry, type PatentCountry } from "@/lib/patent";
 
 import CandidatePicker from "./CandidatePicker";
 import CompoundCard from "./CompoundCard";
@@ -10,6 +12,11 @@ import EmptyState from "./EmptyState";
 import { isActivationTarget, isTypingTarget } from "./keyboard";
 import PaperList from "./PaperList";
 import PatentList from "./PatentList";
+import PatentToolbar, {
+  type PatentCountryFilter,
+  type PatentSortKey,
+  type PatentSourceFilter
+} from "./PatentToolbar";
 import ProviderChips, { isProviderFailure, providerLabel } from "./ProviderChips";
 import ResultTabs, { type ResultTab } from "./ResultTabs";
 import SearchBar from "./SearchBar";
@@ -17,8 +24,9 @@ import SkeletonList, { LoadingBar } from "./SkeletonList";
 import StatusBanner from "./StatusBanner";
 import Toolbar, { type SourceFilter } from "./Toolbar";
 import { usePaperSearch, type SearchPhase } from "./usePaperSearch";
+import { useSelection } from "./useSelection";
 
-function sortPapers(papers: Paper[], sort: SortKey): Paper[] {
+function sortPapers(papers: FoldedPaper[], sort: SortKey): FoldedPaper[] {
   const copy = [...papers];
   if (sort === "citations") {
     copy.sort((a, b) => (b.citations ?? -1) - (a.citations ?? -1));
@@ -30,33 +38,34 @@ function sortPapers(papers: Paper[], sort: SortKey): Paper[] {
   return copy;
 }
 
+/** 특허 정렬. relevance(원본순)는 입력 순서를 그대로 둔다. */
+function sortPatents(patents: Patent[], sort: PatentSortKey): Patent[] {
+  const copy = [...patents];
+  if (sort === "date_desc") {
+    copy.sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+  } else if (sort === "date_asc") {
+    // 날짜 없는 항목은 뒤로 보낸다.
+    copy.sort((a, b) => {
+      if (!a.date) return 1;
+      if (!b.date) return -1;
+      return a.date.localeCompare(b.date);
+    });
+  } else if (sort === "assignee") {
+    // 출원인 없는 항목은 뒤로 보낸다.
+    copy.sort((a, b) => {
+      if (!a.assignee) return 1;
+      if (!b.assignee) return -1;
+      return a.assignee.localeCompare(b.assignee, "ko");
+    });
+  }
+  return copy;
+}
+
 /** 대소문자를 무시하고 keyword가 들어간 항목만 남기는 클라이언트 키워드 필터. */
 function matchesKeyword(fields: Array<string | null>, keyword: string): boolean {
   const term = keyword.trim().toLowerCase();
   if (!term) return true;
   return fields.some((field) => field !== null && field.toLowerCase().includes(term));
-}
-
-/** 특허 탭용 키워드 입력 바(논문 탭 Toolbar의 키워드 입력과 같은 스타일). */
-function PatentKeywordBar({
-  keyword,
-  onKeywordChange
-}: {
-  keyword: string;
-  onKeywordChange: (value: string) => void;
-}) {
-  return (
-    <div className="flex justify-end">
-      <input
-        aria-label="키워드로 특허 거르기"
-        className="h-8 w-48 rounded-lg border border-hairline bg-surface-1 px-2.5 text-sm text-ink transition-colors duration-150 placeholder:text-ink-tertiary hover:border-hairline-strong focus:border-hairline-strong focus:outline-2 focus:outline-primary/50"
-        onChange={(event) => onKeywordChange(event.target.value)}
-        placeholder="제목·공개번호·출원인 거르기"
-        type="search"
-        value={keyword}
-      />
-    </div>
-  );
 }
 
 function liveMessage(phase: SearchPhase, candidateCount: number, paperCount: number) {
@@ -80,6 +89,8 @@ function liveMessage(phase: SearchPhase, candidateCount: number, paperCount: num
   }
 }
 
+const PATENT_COUNTRY_ORDER: PatentCountry[] = ["US", "KR", "EP", "WO", "CN", "JP", "기타"];
+
 export default function PaperSearchApp() {
   const { phase, record, errorMessage, lastQuery, submit, chooseCandidate, retry } =
     usePaperSearch();
@@ -87,8 +98,20 @@ export default function PaperSearchApp() {
   const [sort, setSort] = useState<SortKey>("relevance");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [keyword, setKeyword] = useState("");
+  const [fold, setFold] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [activeTab, setActiveTab] = useState<ResultTab>("papers");
+
+  // 특허 탭 전용 정렬/필터 상태.
+  const [patentSort, setPatentSort] = useState<PatentSortKey>("relevance");
+  const [patentSourceFilter, setPatentSourceFilter] = useState<PatentSourceFilter>("all");
+  const [patentCountryFilter, setPatentCountryFilter] =
+    useState<PatentCountryFilter>("all");
+
+  // 안정 키 기반 다중 선택(탭별). 정렬/필터/탭 전환과 무관하게 유지된다.
+  const paperSelection = useSelection();
+  const patentSelection = useSelection();
+
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const isIdle = phase === "idle";
@@ -106,8 +129,9 @@ export default function PaperSearchApp() {
   const allPapers: Paper[] = useMemo(() => record?.papers ?? [], [record]);
   const allPatents: Patent[] = useMemo(() => record?.patents ?? [], [record]);
 
-  // 파이프라인: 출처 필터 → 키워드 필터(제목/저자/저널) → 정렬.
-  const visiblePapers = useMemo(() => {
+  // 파이프라인: 출처 필터 → 키워드 필터 → (중복 접기) → 정렬.
+  // 접기는 sourceFilter/keyword 이후에 적용해야 "보이는 항목"끼리만 묶인다.
+  const visiblePapers = useMemo<FoldedPaper[]>(() => {
     const bySource =
       sourceFilter === "all"
         ? allPapers
@@ -115,23 +139,80 @@ export default function PaperSearchApp() {
     const byKeyword = bySource.filter((paper) =>
       matchesKeyword([paper.title, paper.authors.join(" "), paper.venue], keyword)
     );
-    return sortPapers(byKeyword, sort);
-  }, [allPapers, sort, sourceFilter, keyword]);
+    const folded = fold
+      ? foldPapers(byKeyword)
+      : byKeyword.map((paper) => ({ ...paper, sources: [paper.source] }));
+    return sortPapers(folded, sort);
+  }, [allPapers, sort, sourceFilter, keyword, fold]);
 
-  // 특허는 정렬/출처 필터가 없고 키워드 필터(제목/공개번호/출원인)만 적용한다.
-  const visiblePatents = useMemo(
-    () =>
-      allPatents.filter((patent) =>
-        matchesKeyword(
-          [patent.title, patent.publication_number, patent.assignee],
-          keyword
-        )
-      ),
-    [allPatents, keyword]
+  // 접기 적용 전(필터만 적용) 수집 건수 — "수집 M건" 표기에 쓴다.
+  const collectedPaperCount = useMemo(() => {
+    const bySource =
+      sourceFilter === "all"
+        ? allPapers
+        : allPapers.filter((paper) => paper.source === sourceFilter);
+    return bySource.filter((paper) =>
+      matchesKeyword([paper.title, paper.authors.join(" "), paper.venue], keyword)
+    ).length;
+  }, [allPapers, sourceFilter, keyword]);
+
+  // 결과에 실제로 존재하는 특허 출처/국가(필터 칩 노출 결정).
+  const availablePatentSources = useMemo(() => {
+    const present = new Set(allPatents.map((patent) => patent.source));
+    return (["surechembl", "kipris"] as const).filter((source) => present.has(source));
+  }, [allPatents]);
+
+  const availablePatentCountries = useMemo(() => {
+    const present = new Set(
+      allPatents.map((patent) => parsePatentCountry(patent.publication_number))
+    );
+    return PATENT_COUNTRY_ORDER.filter((country) => present.has(country));
+  }, [allPatents]);
+
+  // 특허 파이프라인: 출처 필터 → 국가 필터 → 키워드 필터 → 정렬.
+  const visiblePatents = useMemo(() => {
+    const bySource =
+      patentSourceFilter === "all"
+        ? allPatents
+        : allPatents.filter((patent) => patent.source === patentSourceFilter);
+    const byCountry =
+      patentCountryFilter === "all"
+        ? bySource
+        : bySource.filter(
+            (patent) =>
+              parsePatentCountry(patent.publication_number) === patentCountryFilter
+          );
+    const byKeyword = byCountry.filter((patent) =>
+      matchesKeyword(
+        [patent.title, patent.publication_number, patent.assignee],
+        keyword
+      )
+    );
+    return sortPatents(byKeyword, patentSort);
+  }, [allPatents, patentSourceFilter, patentCountryFilter, keyword, patentSort]);
+
+  // 선택된 항목(내보내기용). 안정 키 기준으로 현재 보이는/전체 항목에서 추린다.
+  const selectedPapers = useMemo(
+    () => visiblePapers.filter((paper) => paperSelection.isSelected(paperKey(paper))),
+    [visiblePapers, paperSelection]
+  );
+  const selectedPatents = useMemo(
+    () => visiblePatents.filter((patent) => patentSelection.isSelected(patentKey(patent))),
+    [visiblePatents, patentSelection]
+  );
+
+  const visiblePaperKeys = useMemo(
+    () => visiblePapers.map(paperKey),
+    [visiblePapers]
+  );
+  const visiblePatentKeys = useMemo(
+    () => visiblePatents.map(patentKey),
+    [visiblePatents]
   );
 
   // 키보드 화살표/Enter 내비게이션은 현재 탭의 항목 목록을 대상으로 한다.
-  const navItems = activeTab === "papers" ? visiblePapers : visiblePatents;
+  const navItems: Array<Paper | Patent> =
+    activeTab === "papers" ? visiblePapers : visiblePatents;
 
   const failedProviders = useMemo(
     () =>
@@ -189,12 +270,18 @@ export default function PaperSearchApp() {
     setSort("relevance");
     setSourceFilter("all");
     setKeyword("");
+    setFold(true);
     setSelectedIndex(-1);
     setActiveTab("papers");
+    setPatentSort("relevance");
+    setPatentSourceFilter("all");
+    setPatentCountryFilter("all");
+    paperSelection.clear();
+    patentSelection.clear();
     submit(value);
   }
 
-  // 탭 전환 시 키보드 선택을 초기화한다 (목록이 달라지므로).
+  // 탭 전환 시 키보드 선택을 초기화한다 (목록이 달라지므로). 다중 선택은 유지한다.
   function handleTabChange(next: ResultTab) {
     setSelectedIndex(-1);
     setActiveTab(next);
@@ -217,17 +304,45 @@ export default function PaperSearchApp() {
     setSourceFilter(next);
   }
 
+  function handleFoldChange(next: boolean) {
+    setSelectedIndex(-1);
+    setFold(next);
+  }
+
+  function handlePatentSortChange(next: PatentSortKey) {
+    setSelectedIndex(-1);
+    setPatentSort(next);
+  }
+
+  function handlePatentSourceFilterChange(next: PatentSourceFilter) {
+    setSelectedIndex(-1);
+    setPatentSourceFilter(next);
+  }
+
+  function handlePatentCountryFilterChange(next: PatentCountryFilter) {
+    setSelectedIndex(-1);
+    setPatentCountryFilter(next);
+  }
+
   // 키워드 필터가 바뀌면 키보드 선택을 초기화한다 (행 목록이 달라지므로).
   function handleKeywordChange(next: string) {
     setSelectedIndex(-1);
     setKeyword(next);
   }
 
-  // 키워드/출처 필터를 모두 초기화한다(필터로 결과가 모두 숨었을 때 사용).
-  function handleResetFilters() {
+  // 논문 필터를 모두 초기화한다(필터로 결과가 모두 숨었을 때 사용).
+  function handleResetPaperFilters() {
     setSelectedIndex(-1);
     setKeyword("");
     setSourceFilter("all");
+  }
+
+  // 특허 필터를 모두 초기화한다.
+  function handleResetPatentFilters() {
+    setSelectedIndex(-1);
+    setKeyword("");
+    setPatentSourceFilter("all");
+    setPatentCountryFilter("all");
   }
 
   const announcement = liveMessage(
@@ -322,35 +437,68 @@ export default function PaperSearchApp() {
                 {activeTab === "papers" ? (
                   <>
                     <Toolbar
+                      allSelected={paperSelection.allSelected(visiblePaperKeys)}
                       count={visiblePapers.length}
+                      fold={fold}
                       keyword={keyword}
+                      onClearSelection={paperSelection.clear}
+                      onFoldChange={handleFoldChange}
                       onKeywordChange={handleKeywordChange}
                       onSortChange={handleSortChange}
                       onSourceFilterChange={handleSourceFilterChange}
+                      onToggleAll={() => paperSelection.toggleAll(visiblePaperKeys)}
                       searchId={record.search_id}
+                      selectedCount={paperSelection.count}
+                      selectedPapers={selectedPapers}
                       sort={sort}
                       sourceFilter={sourceFilter}
-                      total={record.papers.length}
+                      total={collectedPaperCount}
+                      visiblePapers={visiblePapers}
                     />
                     <PaperList
                       filtered={allPapers.length > 0}
                       highlight={record.compound?.name ?? ""}
-                      onResetFilters={handleResetFilters}
+                      isChecked={(paper) => paperSelection.isSelected(paperKey(paper))}
+                      onResetFilters={handleResetPaperFilters}
                       onSelect={setSelectedIndex}
+                      onToggleCheck={(paper) => paperSelection.toggle(paperKey(paper))}
                       papers={visiblePapers}
                       selectedIndex={selectedIndex}
                     />
                   </>
                 ) : (
                   <>
-                    <PatentKeywordBar
+                    <PatentToolbar
+                      allSelected={patentSelection.allSelected(visiblePatentKeys)}
+                      availableCountries={availablePatentCountries}
+                      availableSources={availablePatentSources}
+                      count={visiblePatents.length}
+                      countryFilter={patentCountryFilter}
                       keyword={keyword}
+                      onClearSelection={patentSelection.clear}
+                      onCountryFilterChange={handlePatentCountryFilterChange}
                       onKeywordChange={handleKeywordChange}
+                      onSortChange={handlePatentSortChange}
+                      onSourceFilterChange={handlePatentSourceFilterChange}
+                      onToggleAll={() => patentSelection.toggleAll(visiblePatentKeys)}
+                      searchId={record.search_id}
+                      selectedCount={patentSelection.count}
+                      selectedPatents={selectedPatents}
+                      sort={patentSort}
+                      sourceFilter={patentSourceFilter}
+                      total={allPatents.length}
+                      visiblePatents={visiblePatents}
                     />
                     <PatentList
                       filtered={allPatents.length > 0}
-                      onResetFilters={handleResetFilters}
+                      isChecked={(patent) =>
+                        patentSelection.isSelected(patentKey(patent))
+                      }
+                      onResetFilters={handleResetPatentFilters}
                       onSelect={setSelectedIndex}
+                      onToggleCheck={(patent) =>
+                        patentSelection.toggle(patentKey(patent))
+                      }
                       patents={visiblePatents}
                       selectedIndex={selectedIndex}
                       totalHits={record.patents_total_hits}

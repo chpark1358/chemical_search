@@ -7,11 +7,15 @@ import { isSafeUrl, type Patent } from "@/lib/api";
 
 import CopyButton from "./CopyButton";
 import { providerLabel } from "./ProviderChips";
+import SelectCheckbox from "./SelectCheckbox";
 
 interface PatentRowProps {
   patent: Patent;
   selected: boolean;
   onSelect: () => void;
+  /** 다중 선택 체크 상태와 토글 핸들러. */
+  checked: boolean;
+  onToggleCheck: () => void;
 }
 
 /**
@@ -31,7 +35,13 @@ function externalLinkLabel(url: string | null): string {
   return "특허 원문 보기";
 }
 
-export default function PatentRow({ patent, selected, onSelect }: PatentRowProps) {
+export default function PatentRow({
+  patent,
+  selected,
+  onSelect,
+  checked,
+  onToggleCheck
+}: PatentRowProps) {
   const rowRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -53,7 +63,13 @@ export default function PatentRow({ patent, selected, onSelect }: PatentRowProps
       {selected ? (
         <span aria-hidden="true" className="absolute inset-y-0 left-0 w-0.5 bg-primary" />
       ) : null}
-      <div className="min-w-0 flex-1">
+      <div className="flex items-start gap-3">
+        <SelectCheckbox
+          checked={checked}
+          label={`특허 선택: ${patent.title}`}
+          onChange={onToggleCheck}
+        />
+        <div className="min-w-0 flex-1">
         {safeUrl ? (
           <a
             className="text-sm font-medium leading-snug text-ink transition-colors duration-150 hover:text-primary-hover"
@@ -113,6 +129,7 @@ export default function PatentRow({ patent, selected, onSelect }: PatentRowProps
             </a>
           ) : null}
         </p>
+        </div>
       </div>
     </article>
   );

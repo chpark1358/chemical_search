@@ -1,10 +1,10 @@
 "use client";
 
-import type { SortKey, SourceName } from "@/lib/api";
+import type { Paper, SortKey } from "@/lib/api";
 
 import ExportMenu from "./ExportMenu";
 
-export type SourceFilter = "all" | SourceName;
+export type SourceFilter = "all" | "semantic_scholar" | "crossref" | "openalex";
 
 const FILTERS: ReadonlyArray<{ id: SourceFilter; label: string }> = [
   { id: "all", label: "전체" },
@@ -14,15 +14,28 @@ const FILTERS: ReadonlyArray<{ id: SourceFilter; label: string }> = [
 ];
 
 interface ToolbarProps {
+  /** 화면에 보이는 논문 건수(접기·필터 적용 후). */
   count: number;
+  /** 수집한 원본 논문 건수(접기 전). */
   total: number;
   sort: SortKey;
   sourceFilter: SourceFilter;
   keyword: string;
   searchId: string;
+  /** 중복 접기 켜짐 여부. */
+  fold: boolean;
+  /** 다중 선택 상태. */
+  selectedCount: number;
+  allSelected: boolean;
+  /** 내보내기용: 현재 보이는 논문과 선택된 논문. */
+  visiblePapers: Paper[];
+  selectedPapers: Paper[];
   onSortChange: (sort: SortKey) => void;
   onSourceFilterChange: (filter: SourceFilter) => void;
   onKeywordChange: (keyword: string) => void;
+  onFoldChange: (fold: boolean) => void;
+  onToggleAll: () => void;
+  onClearSelection: () => void;
 }
 
 export default function Toolbar({
@@ -32,16 +45,30 @@ export default function Toolbar({
   sourceFilter,
   keyword,
   searchId,
+  fold,
+  selectedCount,
+  allSelected,
+  visiblePapers,
+  selectedPapers,
   onSortChange,
   onSourceFilterChange,
-  onKeywordChange
+  onKeywordChange,
+  onFoldChange,
+  onToggleAll,
+  onClearSelection
 }: ToolbarProps) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
       <div className="flex flex-wrap items-center gap-3">
         <p className="text-sm text-ink-muted">
-          논문 <span className="font-mono">{count}</span>건
-          {count !== total ? (
+          {fold ? "고유" : "논문"} <span className="font-mono">{count}</span>건
+          {fold && count !== total ? (
+            <span className="text-ink-tertiary">
+              {" "}
+              · 수집 <span className="font-mono">{total}</span>건
+            </span>
+          ) : null}
+          {!fold && count !== total ? (
             <span className="text-ink-tertiary">
               {" "}
               / 전체 <span className="font-mono">{total}</span>건
@@ -65,8 +92,24 @@ export default function Toolbar({
             </button>
           ))}
         </div>
+        <label className="flex items-center gap-1.5 text-xs text-ink-subtle">
+          <input
+            checked={fold}
+            className="size-3.5 cursor-pointer accent-primary"
+            data-testid="fold-toggle"
+            onChange={(event) => onFoldChange(event.target.checked)}
+            type="checkbox"
+          />
+          중복 접기
+        </label>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <SelectionControls
+          allSelected={allSelected}
+          onClearSelection={onClearSelection}
+          onToggleAll={onToggleAll}
+          selectedCount={selectedCount}
+        />
         <input
           aria-label="키워드로 결과 거르기"
           className="h-8 w-40 rounded-lg border border-hairline bg-surface-1 px-2.5 text-sm text-ink transition-colors duration-150 placeholder:text-ink-tertiary hover:border-hairline-strong focus:border-hairline-strong focus:outline-2 focus:outline-primary/50"
@@ -88,8 +131,53 @@ export default function Toolbar({
             <option value="year">연도</option>
           </select>
         </label>
-        <ExportMenu searchId={searchId} />
+        <ExportMenu
+          kind="papers"
+          papers={visiblePapers}
+          searchId={searchId}
+          selectedPapers={selectedPapers}
+        />
       </div>
+    </div>
+  );
+}
+
+/** "N개 선택" 표시 + 전체선택/해제 토글. 선택이 없으면 전체선택 버튼만 노출한다. */
+export function SelectionControls({
+  selectedCount,
+  allSelected,
+  onToggleAll,
+  onClearSelection
+}: {
+  selectedCount: number;
+  allSelected: boolean;
+  onToggleAll: () => void;
+  onClearSelection: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      {selectedCount > 0 ? (
+        <span className="text-xs text-ink-muted" data-testid="selected-count">
+          <span className="font-mono">{selectedCount}</span>개 선택
+        </span>
+      ) : null}
+      <button
+        className="h-8 rounded-lg border border-hairline bg-surface-1 px-2.5 text-xs text-ink-subtle transition-colors duration-150 hover:border-hairline-strong hover:text-ink-muted"
+        data-testid="select-all-toggle"
+        onClick={onToggleAll}
+        type="button"
+      >
+        {allSelected ? "선택 해제" : "전체 선택"}
+      </button>
+      {selectedCount > 0 && !allSelected ? (
+        <button
+          className="h-8 rounded-lg border border-hairline bg-surface-1 px-2.5 text-xs text-ink-subtle transition-colors duration-150 hover:border-hairline-strong hover:text-ink-muted"
+          onClick={onClearSelection}
+          type="button"
+        >
+          전체 해제
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -3,11 +3,14 @@
 import { ChevronDown, ExternalLink } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { isSafeUrl, type Paper } from "@/lib/api";
+import { isSafeUrl, type Paper, type PaperSourceName } from "@/lib/api";
+import { toBibTeX } from "@/lib/citation";
+import type { FoldedPaper } from "@/lib/papers";
 import { highlightTerm, sanitizeAbstract } from "@/lib/text";
 
 import CopyButton from "./CopyButton";
 import { providerLabel } from "./ProviderChips";
+import SelectCheckbox from "./SelectCheckbox";
 
 /** 인용수가 이 값 이상이면 고인용 논문으로 강조한다. */
 const HIGH_CITATION_THRESHOLD = 100;
@@ -40,20 +43,31 @@ function HighlightedText({ text, term }: { text: string; term: string }) {
 }
 
 interface PaperRowProps {
-  paper: Paper;
+  paper: FoldedPaper;
   selected: boolean;
   onSelect: () => void;
   /** 강조할 화합물명(있으면 제목/초록에서 <mark>로 표시). */
   highlight?: string;
+  /** 다중 선택 체크 상태와 토글 핸들러. */
+  checked: boolean;
+  onToggleCheck: () => void;
+}
+
+/** 출처 칩에 표시할 라벨(대표 출처를 제외한 추가 출처들). */
+function extraSources(sources: PaperSourceName[], primary: PaperSourceName): string[] {
+  return sources.filter((source) => source !== primary).map(providerLabel);
 }
 
 export default function PaperRow({
   paper,
   selected,
   onSelect,
-  highlight = ""
+  highlight = "",
+  checked,
+  onToggleCheck
 }: PaperRowProps) {
   const [expanded, setExpanded] = useState(false);
+  const [showSources, setShowSources] = useState(false);
   const rowRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -64,6 +78,8 @@ export default function PaperRow({
   const cleanAbstract = useMemo(() => sanitizeAbstract(paper.abstract), [paper.abstract]);
   const isHighCitation =
     paper.citations !== null && paper.citations >= HIGH_CITATION_THRESHOLD;
+  const others = extraSources(paper.sources, paper.source);
+  const bibtex = useMemo(() => toBibTeX(paper), [paper]);
 
   return (
     <article
@@ -77,7 +93,12 @@ export default function PaperRow({
       {selected ? (
         <span aria-hidden="true" className="absolute inset-y-0 left-0 w-0.5 bg-primary" />
       ) : null}
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex items-start gap-3">
+        <SelectCheckbox
+          checked={checked}
+          label={`논문 선택: ${paper.title}`}
+          onChange={onToggleCheck}
+        />
         <div className="min-w-0 flex-1">
           {safeUrl ? (
             <a
@@ -123,13 +144,50 @@ export default function PaperRow({
             <span className="rounded-full border border-hairline px-2 py-px text-ink-subtle">
               {providerLabel(paper.source)}
             </span>
+            {others.length ? (
+              <button
+                aria-expanded={showSources}
+                aria-label={`다른 출처 ${others.length}곳에서도 발견됨: ${others.join(", ")}`}
+                className="inline-flex items-center rounded-full border border-primary/40 bg-primary/10 px-2 py-px text-ink-subtle transition-colors duration-150 hover:border-primary hover:text-ink"
+                data-testid="source-fold-chip"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setShowSources((value) => !value);
+                }}
+                type="button"
+              >
+                +{others.length} 출처
+              </button>
+            ) : null}
+            <CopyButton
+              className="inline-flex shrink-0 items-center gap-1 rounded border border-hairline bg-surface-2 px-1.5 py-px text-ink-subtle transition-colors duration-150 hover:bg-surface-3 hover:text-ink"
+              label="BibTeX"
+              text="BibTeX 복사"
+              value={bibtex}
+            />
           </p>
+          {others.length && showSources ? (
+            <p
+              className="mt-1.5 flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-ink-tertiary"
+              data-testid="source-fold-list"
+            >
+              <span className="text-ink-subtle">발견된 출처:</span>
+              {paper.sources.map((source) => (
+                <span
+                  className="rounded-full border border-hairline px-2 py-px text-ink-subtle"
+                  key={source}
+                >
+                  {providerLabel(source)}
+                </span>
+              ))}
+            </p>
+          ) : null}
         </div>
         {cleanAbstract ? (
           <button
             aria-expanded={expanded}
             aria-label={expanded ? "초록 접기" : "초록 펼치기"}
-            className="mt-0.5 shrink-0 rounded-md p-1 text-ink-subtle transition-colors duration-150 hover:bg-surface-3 hover:text-ink"
+            className="ml-auto mt-0.5 shrink-0 rounded-md p-1 text-ink-subtle transition-colors duration-150 hover:bg-surface-3 hover:text-ink"
             onClick={(event) => {
               event.stopPropagation();
               setExpanded((value) => !value);

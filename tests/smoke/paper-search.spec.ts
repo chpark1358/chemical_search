@@ -332,6 +332,66 @@ test("직접 흐름: 검색 → running → done, 정렬 토글 동작", async (
   );
   // 상위/전체 건수 헤더가 표시된다.
   await expect(page.getByText(/전체\s+692,924\s*건/)).toBeVisible();
+
+  // Stage 2: 특허 탭에도 정렬 컨트롤이 있다(출원인 가나다순으로 토글하면 순서가 바뀐다).
+  const patentSort = page.getByLabel("특허 정렬 기준");
+  await expect(patentSort).toBeVisible();
+  await patentSort.selectOption("assignee");
+  // 가나다순(ko locale)에서는 한글 출원인이 라틴 문자보다 앞선다.
+  // "한국제약 주식회사" → "Example Pharma Co" → (출원인 없는 행은 뒤로).
+  await expect(patentRows.first()).toContainText("한국제약 주식회사");
+});
+
+test("Stage 2: 중복 접기 토글, 다중 선택, BibTeX 내보내기 옵션", async ({ page }) => {
+  await mockApi(page, {
+    create: () => record({ status: "running" }),
+    get: () =>
+      record({
+        status: "done",
+        compound: COMPOUND,
+        papers: PAPERS,
+        patents: PATENTS,
+        patents_total_hits: PATENTS_TOTAL_HITS,
+        providers: PROVIDERS_OK,
+        completed_at: "2026-06-11T00:00:05Z"
+      })
+  });
+
+  await page.goto("/");
+  await submitQuery(page, "aspirin");
+
+  const rows = page.getByTestId("paper-list").getByRole("listitem");
+  await expect(rows).toHaveCount(3, { timeout: 15_000 });
+
+  // 중복 접기 토글이 기본 ON으로 존재한다(서로 다른 DOI라 건수는 유지).
+  const foldToggle = page.getByTestId("fold-toggle");
+  await expect(foldToggle).toBeChecked();
+  await foldToggle.uncheck();
+  await expect(rows).toHaveCount(3);
+  await foldToggle.check();
+  await expect(rows).toHaveCount(3);
+
+  // 행 체크박스로 다중 선택하면 "N개 선택"이 표시된다.
+  const checkboxes = page.getByTestId("row-select");
+  await checkboxes.first().check();
+  await expect(page.getByTestId("selected-count")).toContainText("1");
+
+  // 전체 선택 토글.
+  await page.getByTestId("select-all-toggle").click();
+  await expect(page.getByTestId("selected-count")).toContainText("3");
+
+  // 내보내기 메뉴에 BibTeX 옵션과 선택 항목 전용 모드가 있다.
+  await page.getByTestId("export-menu-trigger").click();
+  await expect(page.getByTestId("export-format-bibtex")).toBeVisible();
+  await expect(page.getByTestId("export-format-ris")).toBeVisible();
+  await expect(page.getByTestId("export-selected-mode")).toBeVisible();
+
+  // BibTeX 클라이언트 다운로드가 트리거된다(선택 항목만).
+  await page.getByTestId("export-selected-mode").click();
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByTestId("export-format-bibtex").click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/\.bib$/);
 });
 
 test("유휴 상태: 한글 예시 칩(아스피린)이 표시된다", async ({ page }) => {

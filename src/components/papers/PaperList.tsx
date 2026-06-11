@@ -1,9 +1,9 @@
-import type { Paper } from "@/lib/api";
+import type { FoldedPaper } from "@/lib/papers";
 
 import PaperRow from "./PaperRow";
 
 interface PaperListProps {
-  papers: Paper[];
+  papers: FoldedPaper[];
   selectedIndex: number;
   onSelect: (index: number) => void;
   /** 행에서 강조할 화합물명. */
@@ -11,6 +11,9 @@ interface PaperListProps {
   /** 필터 적용 전 원본 논문이 1건 이상 있었는지(0건과 "필터로 모두 숨김" 구분용). */
   filtered?: boolean;
   onResetFilters?: () => void;
+  /** 행 안정 키 → 다중 선택 체크 여부 판별. */
+  isChecked: (paper: FoldedPaper) => boolean;
+  onToggleCheck: (paper: FoldedPaper) => void;
 }
 
 export default function PaperList({
@@ -19,7 +22,9 @@ export default function PaperList({
   onSelect,
   highlight,
   filtered = false,
-  onResetFilters
+  onResetFilters,
+  isChecked,
+  onToggleCheck
 }: PaperListProps) {
   if (!papers.length) {
     // filtered=true인데 보이는 항목이 0이면 검색 결과가 아니라 필터가 다 숨긴 것이다.
@@ -54,8 +59,10 @@ export default function PaperList({
       {papers.map((paper, index) => (
         <li className={index > 0 ? "border-t border-hairline" : undefined} key={paper.id}>
           <PaperRow
+            checked={isChecked(paper)}
             highlight={highlight}
             onSelect={() => onSelect(index)}
+            onToggleCheck={() => onToggleCheck(paper)}
             paper={paper}
             selected={index === selectedIndex}
           />

@@ -12,6 +12,9 @@ interface PatentListProps {
   /** 필터 적용 전 원본 특허가 1건 이상 있었는지(0건과 "필터로 모두 숨김" 구분용). */
   filtered?: boolean;
   onResetFilters?: () => void;
+  /** 행 다중 선택 체크 여부 판별과 토글. */
+  isChecked: (patent: Patent) => boolean;
+  onToggleCheck: (patent: Patent) => void;
 }
 
 export default function PatentList({
@@ -20,7 +23,9 @@ export default function PatentList({
   selectedIndex,
   onSelect,
   filtered = false,
-  onResetFilters
+  onResetFilters,
+  isChecked,
+  onToggleCheck
 }: PatentListProps) {
   if (!patents.length) {
     // filtered=true인데 보이는 항목이 0이면 검색 결과가 아니라 필터가 다 숨긴 것이다.
@@ -76,7 +81,9 @@ export default function PatentList({
             key={patent.id}
           >
             <PatentRow
+              checked={isChecked(patent)}
               onSelect={() => onSelect(index)}
+              onToggleCheck={() => onToggleCheck(patent)}
               patent={patent}
               selected={index === selectedIndex}
             />
