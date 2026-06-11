@@ -10,6 +10,7 @@
     "test:smoke": "playwright test tests/smoke"
   },
   "dependencies": {
+    "exceljs": "^4.4.0",
     "lucide-react": "^0.468.0",
     "next": "16.2.6",
     "react": "19.2.6",

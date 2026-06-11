@@ -7,6 +7,7 @@ import { exportUrl, type ExportFormat, type Paper, type Patent } from "@/lib/api
 import {
   exportPapers,
   exportPatents,
+  exportXlsx,
   type ClientFormat,
   type PatentClientFormat
 } from "@/lib/exporters";
@@ -102,6 +103,23 @@ export default function ExportMenu({
     exportPatents(items, format, isSelectedMode ? "patents-selected" : "patents");
   }
 
+  function handleXlsxExport() {
+    setOpen(false);
+    if (kind === "papers") {
+      const items = isSelectedMode ? selectedPapers : papers;
+      void exportXlsx({
+        papers: items,
+        filenameBase: isSelectedMode ? "papers-selected" : "papers"
+      });
+    } else {
+      const items = isSelectedMode ? selectedPatents : patents;
+      void exportXlsx({
+        patents: items,
+        filenameBase: isSelectedMode ? "patents-selected" : "patents"
+      });
+    }
+  }
+
   return (
     <div className="relative" ref={containerRef}>
       <button
@@ -157,6 +175,15 @@ export default function ExportMenu({
               </button>
             </div>
           ) : null}
+          <button
+            className="block w-full px-3 py-1.5 text-left text-sm font-medium text-ink transition-colors duration-150 hover:bg-surface-2"
+            data-testid="export-format-xlsx"
+            onClick={handleXlsxExport}
+            role="menuitem"
+            type="button"
+          >
+            Excel (.xlsx)
+          </button>
           {kind === "papers"
             ? PAPER_FORMATS.map(({ format, label }) => (
                 <button

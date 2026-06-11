@@ -380,8 +380,9 @@ test("Stage 2: 중복 접기 토글, 다중 선택, BibTeX 내보내기 옵션",
   await page.getByTestId("select-all-toggle").click();
   await expect(page.getByTestId("selected-count")).toContainText("3");
 
-  // 내보내기 메뉴에 BibTeX 옵션과 선택 항목 전용 모드가 있다.
+  // 내보내기 메뉴에 Excel(.xlsx)/BibTeX 옵션과 선택 항목 전용 모드가 있다.
   await page.getByTestId("export-menu-trigger").click();
+  await expect(page.getByTestId("export-format-xlsx")).toBeVisible();
   await expect(page.getByTestId("export-format-bibtex")).toBeVisible();
   await expect(page.getByTestId("export-format-ris")).toBeVisible();
   await expect(page.getByTestId("export-selected-mode")).toBeVisible();
@@ -392,6 +393,13 @@ test("Stage 2: 중복 접기 토글, 다중 선택, BibTeX 내보내기 옵션",
   await page.getByTestId("export-format-bibtex").click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toMatch(/\.bib$/);
+
+  // Excel(.xlsx) 다운로드도 트리거된다(선택 항목만, exceljs 동적 import 경로).
+  await page.getByTestId("export-menu-trigger").click();
+  const xlsxDownloadPromise = page.waitForEvent("download");
+  await page.getByTestId("export-format-xlsx").click();
+  const xlsxDownload = await xlsxDownloadPromise;
+  expect(xlsxDownload.suggestedFilename()).toMatch(/\.xlsx$/);
 });
 
 test("유휴 상태: 한글 예시 칩(아스피린)이 표시된다", async ({ page }) => {
