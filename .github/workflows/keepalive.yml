@@ -1,0 +1,25 @@
+name: keepalive
+
+# Pings the private Hugging Face Space every ~30 min so it never reaches the
+# free-tier 48h inactivity sleep. The Space is private, so the request must be
+# authenticated — store an HF read token as the repo secret HF_TOKEN
+# (Settings → Secrets and variables → Actions → New repository secret).
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping HF Space /health
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.HF_TOKEN }}" \
+            https://Rufuspark-chemical-search-api.hf.space/health)
+          echo "HF Space /health -> HTTP $code"
+          if [ "$code" != "200" ]; then
+            echo "Expected 200. If 401/403, add the HF_TOKEN repo secret (read token)."
+            exit 1
+          fi
