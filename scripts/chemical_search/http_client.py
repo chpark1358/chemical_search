@@ -25,9 +25,11 @@ _RETRYABLE_CONNECTION_ERRORS = (
 
 # Per-host minimum interval overrides (seconds). Hosts not listed fall back to
 # ``min_interval_seconds``. SureChEMBL asks callers to be polite, so we throttle
-# its host more conservatively than the default.
+# its host more conservatively than the default. Wikidata's public SPARQL
+# endpoint asks for >=1s between requests plus a descriptive User-Agent.
 _HOST_MIN_INTERVAL_SECONDS: dict[str, float] = {
     "www.surechembl.org": 0.34,
+    "query.wikidata.org": 1.0,
 }
 
 
@@ -118,6 +120,47 @@ class HttpClient:
             retries=retries,
         )
 
+    def get_text(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        cache_ttl_seconds: int = 0,
+        retries: int = 0,
+    ) -> tuple[str, HttpDiagnostics]:
+        """GET a non-JSON body (e.g. XML) as decoded text.
+
+        Shares the throttle/retry/error handling and on-disk cache with
+        ``get_json`` (the raw string is JSON-serializable so the same cache
+        works), but skips JSON parsing so XML endpoints like KIPRIS can be
+        consumed by callers using ``xml.etree``.
+        """
+        return self._request_text(
+            url,
+            headers=headers,
+            cache_ttl_seconds=cache_ttl_seconds,
+            retries=retries,
+        )
+
+    def _cache_key(
+        self,
+        method: str,
+        url: str,
+        request_headers: dict[str, str],
+        json_body: Any | None,
+    ) -> str:
+        # GET keeps its original two-element cache key so existing on-disk
+        # caches stay valid; other methods add method/body to the key.
+        if method == "GET":
+            return json.dumps(
+                [url, sorted(request_headers.items())], separators=(",", ":")
+            )
+        return json.dumps(
+            [method, url, sorted(request_headers.items()), json_body],
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
     def _request_json(
         self,
         method: str,
@@ -131,22 +174,65 @@ class HttpClient:
         started = time.perf_counter()
         request_headers = headers or {}
         method = method.upper()
-        # GET keeps its original two-element cache key so existing on-disk
-        # caches stay valid; other methods add method/body to the key.
-        if method == "GET":
-            cache_key = json.dumps(
-                [url, sorted(request_headers.items())], separators=(",", ":")
-            )
-        else:
-            cache_key = json.dumps(
-                [method, url, sorted(request_headers.items()), json_body],
-                separators=(",", ":"),
-                sort_keys=True,
-            )
+        cache_key = self._cache_key(method, url, request_headers, json_body)
         cached = self.cache.get(cache_key)
         if cached is not None:
             return cached, self._diagnostics(started, 0, cached=True)
 
+        response, attempt = self._send(
+            method, url, request_headers, json_body, started, retries
+        )
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise ProviderHttpError(
+                "error",
+                "Provider returned invalid JSON.",
+                self._diagnostics(started, attempt, message="Invalid JSON response."),
+            ) from exc
+        diagnostics = self._diagnostics(started, attempt)
+        self._cache_set(cache_key, data, cache_ttl_seconds)
+        return data, diagnostics
+
+    def _request_text(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        cache_ttl_seconds: int = 0,
+        retries: int = 0,
+    ) -> tuple[str, HttpDiagnostics]:
+        started = time.perf_counter()
+        request_headers = headers or {}
+        cache_key = self._cache_key("GET", url, request_headers, None)
+        cached = self.cache.get(cache_key)
+        if isinstance(cached, str):
+            return cached, self._diagnostics(started, 0, cached=True)
+
+        response, attempt = self._send(
+            "GET", url, request_headers, None, started, retries
+        )
+        text = response.text
+        diagnostics = self._diagnostics(started, attempt)
+        self._cache_set(cache_key, text, cache_ttl_seconds)
+        return text, diagnostics
+
+    def _send(
+        self,
+        method: str,
+        url: str,
+        request_headers: dict[str, str],
+        json_body: Any | None,
+        started: float,
+        retries: int,
+    ) -> tuple[requests.Response, int]:
+        """Run the throttle/retry loop and return the successful response.
+
+        Raises ``ProviderHttpError`` on timeout, connection failure, or an HTTP
+        status that is not 2xx/3xx. Shared by ``_request_json`` and
+        ``_request_text`` so both JSON and text responses get identical retry,
+        throttle, and status handling.
+        """
         attempt = 0
         for attempt in range(retries + 1):
             self._throttle(url)
@@ -229,28 +315,21 @@ class HttpClient:
                     http_status=status_code,
                 )
 
-            try:
-                data = response.json()
-            except ValueError as exc:
-                raise ProviderHttpError(
-                    "error",
-                    "Provider returned invalid JSON.",
-                    self._diagnostics(started, attempt, message="Invalid JSON response."),
-                ) from exc
-            diagnostics = self._diagnostics(started, attempt)
-            # Cache failures must never affect request success; JsonFileCache.set
-            # swallows OSError internally, this guard covers unexpected paths.
-            try:
-                self.cache.set(cache_key, data, cache_ttl_seconds)
-            except OSError:
-                logger.warning("Cache write raised OSError; ignoring.", exc_info=True)
-            return data, diagnostics
+            return response, attempt
 
         raise ProviderHttpError(  # pragma: no cover - defensive, loop always returns/raises
             "error",
             "Provider request failed.",
             self._diagnostics(started, attempt),
         )
+
+    def _cache_set(self, cache_key: str, data: Any, cache_ttl_seconds: int) -> None:
+        # Cache failures must never affect request success; JsonFileCache.set
+        # swallows OSError internally, this guard covers unexpected paths.
+        try:
+            self.cache.set(cache_key, data, cache_ttl_seconds)
+        except OSError:
+            logger.warning("Cache write raised OSError; ignoring.", exc_info=True)
 
     def _diagnostics(
         self,

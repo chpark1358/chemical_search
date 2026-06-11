@@ -4,7 +4,7 @@
 
 ## 한 줄 요약
 
-2026-06-11부로 제품 스코프가 화학물질 기반 논문 검색(papers-only)으로 축소됐고(D-010), 월드컵 앱 제거(D-012)와 루트 라우트 Linear 스타일 UI 재설계(D-011)를 포함한 백엔드/프론트 재작업이 진행 중이다. 같은 날 특허 검색이 SureChEMBL로 재도입돼(D-014) 결과 유형이 논문(Semantic Scholar/Crossref/OpenAlex 3소스)과 특허(SureChEMBL)로 분리됐다.
+2026-06-11부로 제품 스코프가 화학물질 기반 논문 검색(papers-only)으로 축소됐고(D-010), 월드컵 앱 제거(D-012)와 루트 라우트 Linear 스타일 UI 재설계(D-011)를 포함한 백엔드/프론트 재작업이 진행 중이다. 같은 날 특허 검색이 SureChEMBL로 재도입돼(D-014) 결과 유형이 논문(Semantic Scholar/Crossref/OpenAlex 3소스)과 특허(SureChEMBL)로 분리됐다. 이어 한글 물질명 입력을 Wikidata로 해석하는 기능(D-015, 키 불필요)과 한국 특허 검색을 위한 KIPRIS 특허 source(D-016, `KIPRIS_SERVICE_KEY` 키 게이트)를 추가했다.
 
 ## 스코프 변경 (2026-06-11)
 
@@ -22,9 +22,10 @@
 ### 유지됨
 
 - 입력 감지(name/SMILES/InChI/InChIKey/formula)와 RDKit 구조 정규화
+- 한글 물질명 입력: 2026-06-11 추가(D-015). 질의에 한글이 포함되고 입력 유형이 auto/name이면 PubChem 이름 조회 이전에 Wikidata로 한글명→PubChem CID/InChIKey를 해석하고, 미매칭 시 PubChem 이름 조회로 폴백. API key 불필요. 브랜드/통용명 일부는 미매칭(O-013)
 - PubChem 후보 resolver와 candidate selection 흐름
 - 논문 adapter: Semantic Scholar/Crossref에 2026-06-11 OpenAlex 추가(D-013). 유효 논문 소스는 `semantic_scholar | crossref | openalex` 3개이며 Semantic Scholar는 무인증 best-effort로 유지
-- 특허 source: SureChEMBL(`surechembl`) 2026-06-11 재도입(D-014). 논문과 분리된 결과 유형으로 표시하며 API key 불필요. `sources` 미지정 시 기본값은 논문 3소스 + `surechembl` 전체
+- 특허 source: SureChEMBL(`surechembl`) 2026-06-11 재도입(D-014). 논문과 분리된 결과 유형으로 표시하며 API key 불필요. 같은 날 한국 특허 source `kipris` 추가(D-016): `KIPRIS_SERVICE_KEY`가 설정된 경우에만 동작하는 키워드 기반 검색이며, 미설정 시 비활성(키 없을 때 기본 source 미포함). 특허 탭에 SureChEMBL/KIPRIS가 함께 표시된다. `sources` 미지정 시 기본값은 논문 3소스 + `surechembl`(+ 키 있을 때 `kipris`)
 - provider cache/retry/throttle과 partial result 처리
 - FastAPI normalize/search/candidate selection/result/export 엔드포인트 (record 스키마는 papers-only 기준에 `patents[]`/`patents_total_hits` 추가 중)
 - CSV/Markdown/JSON export
@@ -61,6 +62,8 @@
 - `semantic_scholar_search`: partial, 무인증 HTTP 429. key 신규 발급이 사실상 중단되어 best-effort로 유지 (O-007 완화, D-013)
 - `openalex_search`: 미검증 — provider 구현 후 결과를 기록한다
 - `surechembl`: 2026-06-11 라이브 재검증으로 HTTPS/화합물→특허 매핑 정상 확인(D-014, O-002). provider 구현 후 상세 결과를 기록한다
+- `wikidata_name_lookup`: 한글 물질명 해석(D-015). SPARQL 라이브 검증으로 아스피린→CID 2244 / BSYNRYMUTXBXSQ-UHFFFAOYSA-N, 카페인→2519, 이부프로펜→3672, 아세트아미노펜→1983 확인. 타이레놀·포도당 등 브랜드/통용명 일부 미매칭(O-013). API key 불필요
+- `kipris`: 한국 특허 검색(D-016). `KIPRIS_SERVICE_KEY` 키 게이트로, 현재 키 미발급으로 비활성(O-012). 키 발급 후 fixture/라이브 검증 결과를 기록한다
 - `provider_cache`: ok, 동일 검색의 두 번째 요청이 cache hit로 처리됨
 - `quality_fixture`: ok, 정규화 10/10 통과
 - papers-only 재설계와 SureChEMBL 특허 재도입(백엔드 스키마 변경, 루트 UI)의 검증 결과는 아직 없음 — 재작업 완료 후 기록한다

@@ -257,3 +257,53 @@ SureChEMBL만 추가한다. EPO OPS와 ChEMBL 구조 검색(exact/similarity/sub
 - 검색 상태(done/partial/failed) 판정이 논문·특허 두 결과 유형을 모두 포괄하도록 갱신된다. 모든 곳이 비어 있어도 기존 관례대로 빈 배열과 함께 `done`이다.
 - API key는 추가되지 않는다(SureChEMBL keyless).
 - 이 결정은 D-009(Google Patents 링크아웃)와 D-010(특허 제외)을 부분 갱신한다. D-009의 통합 검색 링크 대신 특허별 딥링크를 사용하고, D-010의 특허 제외 중 SureChEMBL 부분을 되돌린다(EPO OPS/ChEMBL 구조검색 제외는 유지).
+
+## D-015: 한글 물질명 입력을 Wikidata로 해석한다(키 불필요)
+
+날짜: 2026-06-11
+상태: 확정
+
+### 결정
+
+질의에 한글(U+AC00..U+D7A3)이 포함되고 입력 유형이 `auto` 또는 `name`이면, 기존 PubChem 이름 조회 이전에 Wikidata SPARQL로 한글 물질명을 PubChem 식별자로 해석한다. Wikidata가 InChIKey를 반환하면 기존 PubChem InChIKey 해석 경로를 재사용하고, CID만 반환하면 PubChem CID 조회로 정규화한다. 매칭 실패 시 기존 PubChem 이름 조회로 폴백한다. Wikidata는 API key가 필요 없으며, 공용 HttpClient(cache/throttle)와 전용 User-Agent로 호출한다.
+
+### 이유
+
+사용자 요구. 사용자가 아스피린·카페인 등 한글 물질명으로 검색할 수 있어야 한다고 요청했다. Wikidata는 한글 라벨(label/altLabel)에 PubChem CID(P662)와 InChIKey(P235)를 연결하고 있어 키 없이 한글명→PubChem 해석이 가능하다(라이브 검증: 아스피린→CID 2244 / BSYNRYMUTXBXSQ-UHFFFAOYSA-N, 카페인→2519, 이부프로펜→3672, 아세트아미노펜→1983).
+
+### 한계
+
+브랜드명·통용명 일부(예: 타이레놀, 포도당)는 Wikidata에 PubChem CID 매핑이 없어 미매칭된다. 이 경우 한글 그대로 기존 PubChem 이름 조회로 폴백하며, 대개 실패해 기존의 친절한 "찾을 수 없음" 안내로 이어진다.
+
+### 영향
+
+- 입력 해석 경로에 한글 사전 해석 단계가 추가된다. 영문/SMILES/InChI/InChIKey/분자식 입력 동작은 변경되지 않는다(회귀 금지).
+- Wikidata로 한글명을 해석한 경우 `compound.warnings`에 해석 안내(예: "한글 물질명 '<NAME>'을 Wikidata로 해석했습니다 (PubChem CID <cid>).")를 추가한다.
+- `query.wikidata.org` throttle 항목(>=1.0s, polite)과 User-Agent를 추가한다.
+- 환경 변수는 추가되지 않는다(Wikidata keyless).
+
+## D-016: 한국 특허 검색을 KIPRIS로 추가한다(키 게이트)
+
+날짜: 2026-06-11
+상태: 확정
+
+### 결정
+
+한국 특허 검색을 위해 새 특허 source `kipris`를 추가한다. data.go.kr '특허실용신안 정보 검색 서비스'(`kipo-api.kipi.or.kr`)의 단어 검색 엔드포인트를 사용하며, 사용자 입력이 한글이면 한글명, 아니면 `compound.name`을 키워드로 검색한다(특허+실용신안 포함). KIPRIS는 환경 변수 `KIPRIS_SERVICE_KEY`가 설정된 경우에만 동작하고, 미설정 시 provider가 비활성화된다(오류 아님, `providers[]`/`patents[]`에서 제외, 키 없을 때 기본 source에도 미포함). 특허는 논문과 분리된 특허 탭에 SureChEMBL(글로벌)과 함께 표시된다.
+
+### 이유
+
+사용자 요구. 사용자가 한국 특허를 함께 보길 요청했다. data.go.kr 특허실용신안 정보 검색 서비스는 개발단계 키가 자동 승인되는 무료 공개 API로, 한글 키워드로 한국 특허/실용신안을 조회할 수 있다.
+
+### 한계
+
+- 키워드(화합물 이름) 기반 검색이며 화학 구조 검색이 아니다.
+- 서비스 키가 필요하고(개발단계 무료, 약 월 1,000회 호출), 키 발급 전에는 비활성 상태로만 둔다.
+- 응답이 XML(data.go.kr 표준 envelope)이라 방어적으로 파싱한다. `header.successYN != Y` 또는 `resultCode != 00`이면 error로 분류하고 `resultMsg`를 로깅한다(클라이언트에는 sanitize).
+
+### 영향
+
+- 특허 source에 `kipris`가 추가된다. `PatentItem` 매핑: title=inventionTitle, assignee=applicantName, publication_number=publicationNumber 또는 applicationNumber, date=applicationDate(8자리면 YYYY-MM-DD), source="kipris", url=KR 번호로 구성한 Google Patents 또는 KIPRIS 검색 링크(best effort). `totalCount`를 kipris의 `patents_total_hits` 기여분으로 잡는다.
+- 환경 변수 `KIPRIS_SERVICE_KEY`가 추가된다(선택). 키가 없으면 KIPRIS는 기본 source에 포함되지 않고 결과/진단에서 빠진다.
+- 특허 탭에 SureChEMBL과 KIPRIS 특허가 동시에 표시된다.
+- 상태 분류는 ok/empty/rate_limited/timeout/error로 둔다.

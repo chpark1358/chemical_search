@@ -24,20 +24,40 @@ from .models import (
 from .normalize import detect_input_type, normalize_structure
 from .providers import (
     CrossrefProvider,
+    KiprisProvider,
     OpenAlexProvider,
     PubChemProvider,
     SemanticScholarProvider,
     SureChemblProvider,
+    is_kipris_enabled,
 )
 from .results import dedup_patents, merge_papers
+from .wikidata import contains_hangul, resolve_korean_name
 
 
 logger = logging.getLogger(__name__)
 
 PAPER_SOURCES = ("semantic_scholar", "openalex", "crossref")
-PATENT_SOURCES = ("surechembl",)
+# "kipris" is a patent source like "surechembl" but is only active when its
+# service key is configured (see is_kipris_enabled). It is always a *valid*
+# source; default_sources() decides whether it runs by default.
+PATENT_SOURCES = ("surechembl", "kipris")
 ALL_SOURCES = (*PAPER_SOURCES, *PATENT_SOURCES)
 HARD_ERROR_STATUSES = {"rate_limited", "timeout", "error"}
+
+KOREAN_RESOLVED_WARNING = (
+    "한글 물질명 '{name}'을 Wikidata로 해석했습니다 (PubChem CID {cid})."
+)
+
+
+def default_sources() -> tuple[str, ...]:
+    """The sources used when the caller does not specify any.
+
+    KIPRIS is included only when its service key is set so that, with no key,
+    it is absent from providers[]/patents[] (not an error)."""
+    if is_kipris_enabled():
+        return ALL_SOURCES
+    return (*PAPER_SOURCES, "surechembl")
 
 ALL_PROVIDERS_FAILED_ERROR = "논문 및 특허 검색 제공자에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요."
 PROVIDER_CALL_ERROR = "제공자 호출 중 오류가 발생했습니다."
@@ -52,6 +72,7 @@ class SearchPipeline:
         openalex: OpenAlexProvider | None = None,
         crossref: CrossrefProvider | None = None,
         surechembl: SureChemblProvider | None = None,
+        kipris: KiprisProvider | None = None,
         cache_dir: Path | None = None,
         cache_enabled: bool = True,
     ):
@@ -62,13 +83,16 @@ class SearchPipeline:
             or openalex is None
             or crossref is None
             or surechembl is None
+            or kipris is None
         ):
             http = HttpClient(timeout_seconds=10, cache_dir=cache_dir, cache_enabled=cache_enabled)
+        self.http = http
         self.pubchem = pubchem or PubChemProvider(http)
         self.semantic_scholar = semantic_scholar or SemanticScholarProvider(http)
         self.openalex = openalex or OpenAlexProvider(http)
         self.crossref = crossref or CrossrefProvider(http)
         self.surechembl = surechembl or SureChemblProvider(http)
+        self.kipris = kipris or KiprisProvider(http)
 
     def resolve_candidates(
         self,
@@ -77,9 +101,59 @@ class SearchPipeline:
         limit: int = 20,
     ) -> CandidateResolution:
         detected_type = detect_input_type(query) if input_type == "auto" else input_type
+        # Korean (Hangul) names are not understood by PubChem's name lookup, so
+        # for auto/name inputs containing Hangul we first resolve the name to a
+        # PubChem identifier via Wikidata and feed that into the normal PubChem
+        # path. On any miss we fall through to the unchanged PubChem lookup.
+        if input_type in {"auto", "name"} and contains_hangul(query):
+            korean = self._resolve_korean(query, limit)
+            if korean is not None:
+                return korean
         candidates, diagnostics = self.pubchem.resolve_candidates(query, detected_type, limit)
         return CandidateResolution(
             detected_type=detected_type,
+            candidates=candidates,
+            diagnostics=diagnostics,
+        )
+
+    def _resolve_korean(self, query: str, limit: int) -> CandidateResolution | None:
+        """Resolve a Hangul query via Wikidata then PubChem.
+
+        Returns a ``CandidateResolution`` when Wikidata yields a CID/InChIKey
+        that PubChem confirms, else ``None`` (caller falls through to the normal
+        PubChem name lookup). Failures never raise: Wikidata problems are
+        swallowed inside ``resolve_korean_name``.
+        """
+        if self.http is None:
+            return None
+        resolution = resolve_korean_name(query, self.http)
+        if resolution is None:
+            return None
+
+        # Prefer the InChIKey path (a single confident PubChem candidate);
+        # fall back to the CID path when only a CID is available.
+        if resolution.inchi_key:
+            candidates, diagnostics = self.pubchem.resolve_candidates(
+                resolution.inchi_key, "inchi_key", limit
+            )
+        elif resolution.cid is not None:
+            candidates, diagnostics = self.pubchem.resolve_by_cid(resolution.cid, limit)
+        else:  # pragma: no cover - resolve_korean_name never returns this shape
+            return None
+
+        if not candidates:
+            return None
+
+        note = KOREAN_RESOLVED_WARNING.format(
+            name=resolution.label,
+            cid=resolution.cid if resolution.cid is not None else "-",
+        )
+        for candidate in candidates:
+            candidate.warnings.append(note)
+        # Korean input is, by definition, a name; report it as such regardless
+        # of how PubChem ultimately resolved it.
+        return CandidateResolution(
+            detected_type="name",
             candidates=candidates,
             diagnostics=diagnostics,
         )
@@ -99,7 +173,11 @@ class SearchPipeline:
 
         The candidate is used directly; candidates are never re-fetched here.
         Papers come from Semantic Scholar / OpenAlex / Crossref and patents
-        from SureChEMBL; the two result types are reported separately.
+        from SureChEMBL plus (when its key is set) KIPRIS; the two result types
+        are reported separately. SureChEMBL and KIPRIS patents are merged into
+        a single ``patents`` list, deduplicated by publication number across
+        both sources, and their ``totalCount`` contributions are summed into
+        ``patents_total_hits``.
         """
         selected_sources = self._validate_sources(sources)
         compound = self._build_compound(candidate)
@@ -128,11 +206,15 @@ class SearchPipeline:
             paper_lists.append(papers)
             diagnostics.append(provider_diagnostics)
 
-        patents: list[PatentItem] = []
-        patents_total_hits: int | None = None
+        # KIPRIS prefers the original Korean query when the user typed Korean,
+        # otherwise the resolved compound name.
+        kipris_word = query if contains_hangul(query) else (compound.name or query)
+
+        patent_items: list[PatentItem] = []
+        total_hits_parts: list[int] = []
         if "surechembl" in selected_sources:
             try:
-                patents, patents_total_hits, patent_diagnostics = self.surechembl.search_patents(
+                sc_patents, sc_total, patent_diagnostics = self.surechembl.search_patents(
                     smiles=compound.canonical_smiles,
                     compound_name=compound.name or query,
                     inchi_key=compound.inchi_key,
@@ -140,15 +222,43 @@ class SearchPipeline:
                 )
             except Exception:
                 logger.exception("Patent provider 'surechembl' raised unexpectedly.")
-                patents = []
-                patents_total_hits = None
+                sc_patents = []
+                sc_total = None
                 patent_diagnostics = ProviderDiagnostics(
                     name="surechembl",
                     status="error",
                     message=PROVIDER_CALL_ERROR,
                 )
-            patents = dedup_patents(patents)[:limit]
+            patent_items.extend(sc_patents)
+            if sc_total is not None:
+                total_hits_parts.append(sc_total)
             diagnostics.append(patent_diagnostics)
+
+        if "kipris" in selected_sources:
+            try:
+                kipris_patents, kipris_total, kipris_diagnostics = self.kipris.search_patents(
+                    word=kipris_word,
+                    limit=limit,
+                )
+            except Exception:
+                logger.exception("Patent provider 'kipris' raised unexpectedly.")
+                kipris_patents = []
+                kipris_total = None
+                kipris_diagnostics = ProviderDiagnostics(
+                    name="kipris",
+                    status="error",
+                    message=PROVIDER_CALL_ERROR,
+                )
+            patent_items.extend(kipris_patents)
+            if kipris_total is not None:
+                total_hits_parts.append(kipris_total)
+            diagnostics.append(kipris_diagnostics)
+
+        # Dedup across SureChEMBL + KIPRIS by publication number, then cap.
+        patents = dedup_patents(patent_items)[:limit]
+        # patents_total_hits is the sum of each patent source's reported total;
+        # None when no patent source reported a count (e.g. none selected).
+        patents_total_hits = sum(total_hits_parts) if total_hits_parts else None
 
         papers = merge_papers(paper_lists, sort=sort)[:limit]
         status, error = self._derive_status(diagnostics)
@@ -166,14 +276,22 @@ class SearchPipeline:
 
     @staticmethod
     def _validate_sources(sources: Sequence[str] | None) -> set[str]:
+        # No explicit sources => the conditional default set. KIPRIS is only in
+        # the default set when its service key is configured, so with no key it
+        # never runs by default (and so is absent from providers[]/patents[]).
         if sources is None:
-            return set(ALL_SOURCES)
+            return set(default_sources())
         selected = set(sources)
         if not selected:
             raise ValueError("sources must contain at least one source.")
         invalid = selected - set(ALL_SOURCES)
         if invalid:
             raise ValueError(f"Unsupported sources: {sorted(invalid)}. Expected {ALL_SOURCES}.")
+        # "kipris" is a valid source value, but without a configured key the
+        # provider is inactive: drop it from the active set so it never runs
+        # and never appears in providers[]/patents[].
+        if "kipris" in selected and not is_kipris_enabled():
+            selected.discard("kipris")
         return selected
 
     @staticmethod

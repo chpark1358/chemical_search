@@ -54,6 +54,14 @@ const PROVIDERS_OK: Json[] = [
     cached: false,
     retry_count: 0,
     message: null
+  },
+  {
+    name: "kipris",
+    status: "ok",
+    latency_ms: 720,
+    cached: false,
+    retry_count: 0,
+    message: null
   }
 ];
 
@@ -75,6 +83,15 @@ const PATENTS: Json[] = [
     assignee: null,
     date: null,
     source: "surechembl"
+  },
+  {
+    id: "KR-1020200012345-A",
+    publication_number: "1020200012345",
+    title: "아스피린 서방성 조성물 및 그 제조방법",
+    url: "https://www.kipris.or.kr/khome/search/searchResult.do?word=아스피린",
+    assignee: "한국제약 주식회사",
+    date: "2020-01-01",
+    source: "kipris"
   }
 ];
 
@@ -201,7 +218,7 @@ async function mockApi(page: Page, handlers: ApiHandlers) {
 }
 
 async function submitQuery(page: Page, query: string) {
-  const input = page.getByPlaceholder(/물질명, SMILES/);
+  const input = page.getByPlaceholder(/물질명.*SMILES/);
   const button = page.getByRole("button", { name: "검색", exact: true });
   // 하이드레이션 전에 fill이 실행되면 React 상태가 비어 버튼이 비활성화된 채 남는다.
   // 버튼이 활성화될 때까지 fill을 재시도해 하이드레이션 경합을 피한다.
@@ -243,10 +260,14 @@ test("직접 흐름: 검색 → running → done, 정렬 토글 동작", async (
   const openalexChip = page.getByTestId("provider-chip-openalex");
   await expect(openalexChip).toContainText("OpenAlex");
   await expect(openalexChip).toContainText("1건");
-  // SureChEMBL은 특허 출처이므로 특허 건수를 보여준다.
+  // SureChEMBL은 특허 출처이므로 특허 건수(source==="surechembl")를 보여준다.
   const surechemblChip = page.getByTestId("provider-chip-surechembl");
   await expect(surechemblChip).toContainText("SureChEMBL");
   await expect(surechemblChip).toContainText("2건");
+  // KIPRIS도 특허 출처이며, source==="kipris" 특허 건수(1건)를 보여준다.
+  const kiprisChip = page.getByTestId("provider-chip-kipris");
+  await expect(kiprisChip).toContainText("KIPRIS");
+  await expect(kiprisChip).toContainText("1건");
   await expect(
     page.getByRole("link", { name: /Aspirin and cardiovascular outcomes/ })
   ).toBeVisible();
@@ -279,15 +300,16 @@ test("직접 흐름: 검색 → running → done, 정렬 토글 동작", async (
   // 결과 탭: 기본은 논문 탭이고 특허 탭에는 특허 건수가 표시된다.
   const patentTab = page.getByTestId("result-tab-patents");
   await expect(patentTab).toContainText("특허");
-  await expect(patentTab).toContainText("2");
+  await expect(patentTab).toContainText("3");
   await expect(page.getByTestId("result-tab-papers")).toHaveAttribute(
     "aria-selected",
     "true"
   );
   // 특허 탭으로 전환하면 특허 행과 Google Patents 외부 링크가 렌더된다.
   await patentTab.click();
-  const patentRows = page.getByTestId("patent-list").getByRole("listitem");
-  await expect(patentRows).toHaveCount(2);
+  const patentList = page.getByTestId("patent-list");
+  const patentRows = patentList.getByRole("listitem");
+  await expect(patentRows).toHaveCount(3);
   await expect(patentRows.first()).toContainText("CN102369480A");
   const patentLink = page.getByRole("link", {
     name: /Aspirin sustained-release composition/
@@ -298,8 +320,30 @@ test("직접 흐름: 검색 → running → done, 정렬 토글 동작", async (
     "https://patents.google.com/patent/CN102369480A/en"
   );
   await expect(patentLink).toHaveAttribute("target", "_blank");
+  // 특허 행에는 출처 배지가 표시된다: SureChEMBL 특허와 KIPRIS(한글 특허) 모두.
+  await expect(patentList.getByText("SureChEMBL", { exact: true }).first()).toBeVisible();
+  await expect(patentList.getByText("KIPRIS", { exact: true }).first()).toBeVisible();
+  // KIPRIS 한글 특허 행이 렌더되고 외부 링크가 KIPRIS로 연결된다.
+  const kiprisLink = page.getByRole("link", { name: /아스피린 서방성 조성물/ });
+  await expect(kiprisLink).toBeVisible();
+  await expect(kiprisLink).toHaveAttribute(
+    "href",
+    "https://www.kipris.or.kr/khome/search/searchResult.do?word=아스피린"
+  );
   // 상위/전체 건수 헤더가 표시된다.
   await expect(page.getByText(/전체\s+692,924\s*건/)).toBeVisible();
+});
+
+test("유휴 상태: 한글 예시 칩(아스피린)이 표시된다", async ({ page }) => {
+  await mockApi(page, {
+    create: () => record({ status: "running" })
+  });
+
+  await page.goto("/");
+  // 히어로 예시 칩에 한글 물질명 입력 예시가 포함된다.
+  await expect(
+    page.getByRole("button", { name: "아스피린", exact: true })
+  ).toBeVisible();
 });
 
 test("후보 선택 흐름: needs_candidate_selection → 선택 → done", async ({ page }) => {

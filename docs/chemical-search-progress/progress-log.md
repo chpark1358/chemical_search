@@ -1,5 +1,43 @@
 # 개발 진행 로그
 
+## 2026-06-11: Wikidata 한글 물질명 입력 + KIPRIS 한국 특허(키 게이트) 추가
+
+상태: 진행 중
+
+### 목적
+
+사용자 요구에 따라 (A) 한글 물질명 입력 지원과 (B) 한국 특허 검색을 추가한다.
+
+### 진행 내용
+
+- 한글 물질명 입력 결정 기록 (D-015): 질의에 한글이 포함되면 기존 PubChem 이름 조회 이전에 Wikidata SPARQL로 한글명→PubChem CID/InChIKey를 해석하고, 실패 시 PubChem 이름 조회로 폴백. API key 불필요
+- Wikidata 라이브 검증: 아스피린→CID 2244 / BSYNRYMUTXBXSQ-UHFFFAOYSA-N, 카페인→2519, 이부프로펜→3672, 아세트아미노펜→1983. 타이레놀·포도당 등 브랜드/통용명 일부 미매칭 확인
+- Wikidata 해석 시 `compound.warnings`에 해석 안내 추가, `query.wikidata.org` throttle(>=1.0s, polite)과 User-Agent 정의. 영문/SMILES/InChI/InChIKey/분자식 입력 무회귀 원칙 명시
+- 한국 특허 검색 결정 기록 (D-016): 새 특허 source `kipris`, data.go.kr '특허실용신안 정보 검색 서비스'(`kipo-api.kipi.or.kr`) 단어 검색, 한글이면 한글명·아니면 compound.name으로 키워드 검색(특허+실용신안)
+- KIPRIS는 `KIPRIS_SERVICE_KEY`가 설정된 경우에만 동작(키 게이트). 미설정 시 비활성(오류 아님, providers[]/patents[]·기본 source에서 제외)
+- XML(data.go.kr 표준 envelope) 방어적 파싱과 `PatentItem` 매핑(title/assignee/publication_number/date/source="kipris"/url), `totalCount`를 kipris의 patents_total_hits 기여분으로 정의. successYN!=Y 또는 resultCode!=00 → error
+- O-012(KIPRIS 키 미발급 시 비활성, 상태 '대기')와 O-013(Wikidata 한글명 커버리지 한계) 추가
+- `.env.example`에 `KIPRIS_SERVICE_KEY` 추가, `README.md`에 한글 입력(Wikidata)·한국 특허(KIPRIS, 선택 키)·외부 네트워크(query.wikidata.org, kipo-api.kipi.or.kr) 반영
+
+### 변경 파일
+
+- `.env.example`
+- `README.md`
+- `docs/chemical-search-progress/current-status.md`
+- `docs/chemical-search-progress/decision-log.md`
+- `docs/chemical-search-progress/open-issues.md`
+- `docs/chemical-search-progress/progress-log.md`
+
+### 검증
+
+- 문서 정비 작업으로 코드 검증 없음. Wikidata 입력 해석/KIPRIS provider 구현의 lint/테스트 결과는 해당 작업 종료 시 기록한다. KIPRIS는 사용자 키 발급 후 fixture/라이브 검증한다(O-012).
+
+### 다음 작업
+
+1. `scripts/chemical_search` 한글 입력 사전 해석(Wikidata) 구현과 PubChem CID/InChIKey 경로 재사용
+2. KIPRIS provider 구현(XML 파싱, 상태 분류 ok/empty/rate_limited/timeout/error, 키 게이트)과 fixture 테스트
+3. UI 특허 탭에 SureChEMBL/KIPRIS 동시 표시 반영
+
 ## 2026-06-11: SureChEMBL 특허 프로바이더 추가(논문/특허 분리)
 
 상태: 진행 중

@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Literal
+
+
+# Valid ``PatentItem.source`` values. SureChEMBL is always available; KIPRIS is
+# key-gated (see providers.is_kipris_enabled).
+PatentSource = Literal["surechembl", "kipris"]
 
 
 # Placeholder title injected by providers when a paper carries no title.
@@ -77,7 +82,10 @@ class PaperItem:
 
 @dataclass
 class PatentItem:
-    """A single patent document from SureChEMBL."""
+    """A single patent document from SureChEMBL or KIPRIS.
+
+    ``source`` is one of the patent sources: "surechembl" or "kipris".
+    """
 
     id: str
     publication_number: str
@@ -85,7 +93,20 @@ class PatentItem:
     url: str | None = None
     assignee: str | None = None
     date: str | None = None
-    source: str = "surechembl"
+    source: PatentSource = "surechembl"
+
+
+@dataclass
+class KoreanNameResolution:
+    """Wikidata resolution of a Korean (Hangul) chemical name.
+
+    ``cid`` is the PubChem CID (Wikidata property P662) and ``inchi_key`` the
+    InChIKey (P235) when present. ``label`` is the Korean query that matched.
+    """
+
+    label: str
+    cid: int | None = None
+    inchi_key: str | None = None
 
 
 @dataclass

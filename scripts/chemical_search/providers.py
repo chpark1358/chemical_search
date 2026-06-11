@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from typing import Any
 from urllib.parse import quote
+from xml.etree import ElementTree
 
 from .http_client import HttpClient, ProviderHttpError
 from .models import (
@@ -19,11 +21,18 @@ from .models import (
 )
 
 
+logger = logging.getLogger(__name__)
+
 PUBCHEM_CACHE_TTL = 7 * 24 * 60 * 60
 SEMANTIC_SCHOLAR_CACHE_TTL = 3 * 24 * 60 * 60
 CROSSREF_CACHE_TTL = 7 * 24 * 60 * 60
 OPENALEX_CACHE_TTL = 3 * 24 * 60 * 60
 SURECHEMBL_CACHE_TTL = 7 * 24 * 60 * 60
+KIPRIS_CACHE_TTL = 24 * 60 * 60
+
+# Environment variable that gates the KIPRIS patent provider. When unset the
+# provider is inactive (see pipeline.PATENT_SOURCES / is_kipris_enabled).
+KIPRIS_SERVICE_KEY_ENV = "KIPRIS_SERVICE_KEY"
 
 # SureChEMBL encodes a JSON null as the literal string "null"; treat it as None.
 _SURECHEMBL_NULL = "null"
@@ -102,6 +111,31 @@ class PubChemProvider:
                     f"{quote(query, safe='')}/property/{self.property_names}/JSON"
                 )
 
+            data, http = self.http.get_json(
+                property_url,
+                cache_ttl_seconds=PUBCHEM_CACHE_TTL,
+                retries=2,
+            )
+            rows = data.get("PropertyTable", {}).get("Properties", [])[:limit]
+            candidates = [self._candidate(row) for row in rows]
+            status = "ok" if candidates else "empty"
+            return candidates, ProviderDiagnostics.from_http(self.name, status, http)
+        except ProviderHttpError as exc:
+            return [], _error_diagnostics(self.name, exc)
+
+    def resolve_by_cid(
+        self,
+        cid: int,
+        limit: int = 1,
+    ) -> tuple[list[CompoundCandidate], ProviderDiagnostics]:
+        """Resolve a single PubChem CID to a candidate using the same property
+        set as the name path. Used by the Wikidata Korean-name path when only a
+        CID (no InChIKey) is available."""
+        try:
+            property_url = (
+                "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/"
+                f"{int(cid)}/property/{self.property_names}/JSON"
+            )
             data, http = self.http.get_json(
                 property_url,
                 cache_ttl_seconds=PUBCHEM_CACHE_TTL,
@@ -505,6 +539,175 @@ class SureChemblProvider:
         if not text or text == _SURECHEMBL_NULL:
             return None
         return text
+
+    @staticmethod
+    def _int(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+            return int(value)
+        return None
+
+
+def is_kipris_enabled() -> bool:
+    """KIPRIS only runs when its service key is configured.
+
+    Without a key the provider is inactive: it is absent from the default
+    patent sources and never produces a diagnostic. A blank/whitespace-only
+    value counts as unset.
+    """
+    return bool((os.getenv(KIPRIS_SERVICE_KEY_ENV) or "").strip())
+
+
+class KiprisProvider:
+    """KIPRIS (Korean Intellectual Property Rights Information Service) search.
+
+    Free-text patent + utility-model search against the data.go.kr KIPRIS
+    OpenAPI ``getWordSearch`` endpoint. The endpoint returns the data.go.kr
+    standard XML envelope, parsed defensively with ``xml.etree``. The provider
+    only runs when ``KIPRIS_SERVICE_KEY`` is set (see ``is_kipris_enabled``).
+    """
+
+    name = "kipris"
+    base_url = (
+        "http://kipo-api.kipi.or.kr/openapi/service/"
+        "patUtiModInfoSearchSevice/getWordSearch"
+    )
+
+    def __init__(self, http: HttpClient):
+        self.http = http
+
+    def search_patents(
+        self,
+        *,
+        word: str,
+        limit: int,
+    ) -> tuple[list[PatentItem], int | None, ProviderDiagnostics]:
+        """Search KIPRIS for ``word`` and return ``(patents, total_hits, diag)``.
+
+        ``total_hits`` is the envelope ``totalCount``. A ``successYN`` other
+        than "Y" (or a non-"00" result code) is treated as an error, with the
+        upstream message logged server-side but not surfaced to clients.
+        """
+        service_key = (os.getenv(KIPRIS_SERVICE_KEY_ENV) or "").strip()
+        # Defensive: callers gate on is_kipris_enabled(), but guard anyway so a
+        # direct call without a key produces a clean "empty" rather than a
+        # confusing upstream auth error.
+        if not service_key:
+            no_call = HttpDiagnostics(latency_ms=0, cached=False, retry_count=0)
+            return [], None, ProviderDiagnostics.from_http(self.name, "empty", no_call)
+
+        url = (
+            f"{self.base_url}"
+            f"?word={quote(word, safe='')}"
+            f"&ServiceKey={quote(service_key, safe='')}"
+            f"&numOfRows={limit}"
+            "&pageNo=1"
+            "&patent=true"
+            "&utility=true"
+        )
+        try:
+            text, http = self.http.get_text(
+                url,
+                cache_ttl_seconds=KIPRIS_CACHE_TTL,
+                retries=1,
+            )
+        except ProviderHttpError as exc:
+            return [], None, _error_diagnostics(self.name, exc)
+
+        try:
+            root = ElementTree.fromstring(text)
+        except ElementTree.ParseError:
+            logger.warning("KIPRIS returned a malformed XML response.")
+            return [], None, ProviderDiagnostics.from_http(
+                self.name,
+                "error",
+                http,
+                message="KIPRIS 응답을 해석할 수 없습니다.",
+            )
+
+        success = self._text(root.find("./header/successYN"))
+        result_code = self._text(root.find("./header/resultCode"))
+        if (success and success != "Y") or (result_code and result_code != "00"):
+            result_msg = self._text(root.find("./header/resultMsg")) or "(메시지 없음)"
+            logger.warning(
+                "KIPRIS request failed: successYN=%s resultCode=%s resultMsg=%s",
+                success,
+                result_code,
+                result_msg,
+            )
+            return [], None, ProviderDiagnostics.from_http(
+                self.name,
+                "error",
+                http,
+                message="KIPRIS 검색에 실패했습니다.",
+            )
+
+        items = root.findall("./body/items/item")
+        patents = [self._patent(item) for item in items]
+        total_hits = self._int(self._text(root.find("./body/totalCount")))
+        status = "ok" if patents else "empty"
+        return patents, total_hits, ProviderDiagnostics.from_http(self.name, status, http)
+
+    def _patent(self, item: ElementTree.Element) -> PatentItem:
+        title = self._text(item.find("inventionTitle")) or UNTITLED_PATENT
+        assignee = self._text(item.find("applicantName"))
+        application_number = self._text(item.find("applicationNumber"))
+        publication_number = self._text(item.find("publicationNumber")) or application_number
+        application_date = self._format_date(self._text(item.find("applicationDate")))
+        return PatentItem(
+            id=application_number or publication_number or UNTITLED_PATENT,
+            publication_number=publication_number or "",
+            title=title,
+            url=self._url(publication_number, application_number, word=title),
+            assignee=assignee,
+            date=application_date,
+            source=self.name,
+        )
+
+    @staticmethod
+    def _url(
+        publication_number: str | None,
+        application_number: str | None,
+        *,
+        word: str,
+    ) -> str:
+        """Best-effort link for a KIPRIS hit.
+
+        Prefer a Google Patents KR link built from the publication number
+        (falling back to the application number); when no usable number exists,
+        fall back to a KIPRIS keyword search URL.
+        """
+        for raw in (publication_number, application_number):
+            digits = re.sub(r"\D", "", raw or "")
+            if digits:
+                return f"https://patents.google.com/patent/KR{digits}"
+        return (
+            "https://www.kipris.or.kr/khome/search/searchResult.do"
+            f"?word={quote(word, safe='')}"
+        )
+
+    @staticmethod
+    def _format_date(value: str | None) -> str | None:
+        """Format an 8-digit ``YYYYMMDD`` string as ``YYYY-MM-DD``.
+
+        Any other shape (empty, partial, non-numeric) returns the cleaned value
+        when present, else None, so callers never crash on odd KIPRIS dates."""
+        if not value:
+            return None
+        if len(value) == 8 and value.isdigit():
+            return f"{value[0:4]}-{value[4:6]}-{value[6:8]}"
+        return value or None
+
+    @staticmethod
+    def _text(element: ElementTree.Element | None) -> str | None:
+        """Return stripped element text, or None when missing/empty."""
+        if element is None or element.text is None:
+            return None
+        text = element.text.strip()
+        return text or None
 
     @staticmethod
     def _int(value: Any) -> int | None:

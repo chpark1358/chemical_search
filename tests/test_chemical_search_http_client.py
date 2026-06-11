@@ -14,10 +14,17 @@ from chemical_search.http_client import HttpClient, ProviderHttpError
 
 
 class FakeResponse:
-    def __init__(self, status_code: int, payload: dict, headers: dict[str, str] | None = None):
+    def __init__(
+        self,
+        status_code: int,
+        payload: dict,
+        headers: dict[str, str] | None = None,
+        text: str | None = None,
+    ):
         self.status_code = status_code
         self.payload = payload
         self.headers = headers or {}
+        self.text = text if text is not None else ""
 
     def json(self) -> dict:
         return self.payload
@@ -28,8 +35,10 @@ class FakeSession:
         self.responses = responses
         self.calls = 0
         self.headers: dict[str, str] = {}
+        self.received_headers: list[dict[str, str]] = []
 
     def get(self, url: str, timeout: int, headers: dict[str, str]) -> FakeResponse:
+        self.received_headers.append(headers)
         item = self.responses[self.calls]
         self.calls += 1
         if isinstance(item, Exception):
@@ -168,6 +177,57 @@ class HttpClientTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status, "not_found")
         self.assertEqual(context.exception.http_status, 404)
+
+    def test_get_text_returns_body_and_caches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = HttpClient(cache_dir=Path(directory), min_interval_seconds=0)
+            xml = "<response><body>ok</body></response>"
+            client.session = FakeSession([FakeResponse(200, {}, text=xml)])
+
+            first, first_diag = client.get_text(
+                "https://kipo-api.example/search", cache_ttl_seconds=60
+            )
+            second, second_diag = client.get_text(
+                "https://kipo-api.example/search", cache_ttl_seconds=60
+            )
+
+            self.assertEqual(first, xml)
+            self.assertEqual(second, xml)
+            self.assertFalse(first_diag.cached)
+            self.assertTrue(second_diag.cached)
+            self.assertEqual(client.session.calls, 1)
+
+    def test_get_text_retries_and_maps_error(self):
+        client = HttpClient(
+            cache_enabled=False,
+            min_interval_seconds=0,
+            sleep_fn=lambda seconds: None,
+        )
+        client.session = FakeSession(
+            [FakeResponse(503, {}), FakeResponse(503, {})]
+        )
+
+        with self.assertRaises(ProviderHttpError) as context:
+            client.get_text("https://kipo-api.example/search", retries=1)
+
+        self.assertEqual(context.exception.status, "error")
+
+    def test_per_request_user_agent_overrides_session_default(self):
+        client = HttpClient(cache_enabled=False, min_interval_seconds=0)
+        client.session = FakeSession([FakeResponse(200, {"ok": True})])
+
+        client.get_json(
+            "https://query.wikidata.org/sparql?query=x",
+            headers={"User-Agent": "chemical-papers/1.0 (solutionops@jiran.com)"},
+        )
+
+        sent = client.session.received_headers[0]
+        self.assertEqual(sent["User-Agent"], "chemical-papers/1.0 (solutionops@jiran.com)")
+
+    def test_wikidata_host_throttle_is_at_least_one_second(self):
+        from chemical_search.http_client import _HOST_MIN_INTERVAL_SECONDS
+
+        self.assertGreaterEqual(_HOST_MIN_INTERVAL_SECONDS["query.wikidata.org"], 1.0)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 import { Search } from "lucide-react";
 import type { FormEvent, RefObject } from "react";
 
-const EXAMPLES = ["aspirin", "CC(=O)Oc1ccccc1C(=O)O", "C9H8O4"] as const;
+const EXAMPLES = ["아스피린", "aspirin", "CC(=O)Oc1ccccc1C(=O)O", "C9H8O4"] as const;
 
 interface SearchBarProps {
   variant: "hero" | "compact";
@@ -45,7 +45,7 @@ export default function SearchBar({
               isHero ? "h-12 text-base" : "h-9 text-sm"
             }`}
             onChange={(event) => onChange(event.target.value)}
-            placeholder="물질명, SMILES, InChIKey, 분자식…"
+            placeholder="물질명(한글/영문), SMILES, InChIKey, 분자식…"
             ref={inputRef}
             spellCheck={false}
             type="text"

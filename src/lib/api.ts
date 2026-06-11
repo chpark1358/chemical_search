@@ -20,7 +20,7 @@ export type InputType =
 
 export type PaperSourceName = "semantic_scholar" | "crossref" | "openalex";
 
-export type PatentSourceName = "surechembl";
+export type PatentSourceName = "surechembl" | "kipris";
 
 /** 논문/특허 출처를 모두 포함하는 검색 소스 식별자. */
 export type SourceName = PaperSourceName | PatentSourceName;

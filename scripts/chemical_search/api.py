@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -28,6 +29,7 @@ from .models import (
     ProviderDiagnostics,
     SearchReport,
 )
+from .env import load_dotenv
 from .normalize import detect_input_type, normalize_structure
 from .pipeline import SearchPipeline
 from .rendering import render_csv, render_json, render_markdown
@@ -35,9 +37,12 @@ from .rendering import render_csv, render_json, render_markdown
 
 logger = logging.getLogger(__name__)
 
-# "surechembl" is a PATENT source; the other three are paper sources. The
-# default (omitted/null) runs all of them.
-SearchSource = Literal["semantic_scholar", "crossref", "openalex", "surechembl"]
+# "surechembl" and "kipris" are PATENT sources; the other three are paper
+# sources. The default (omitted/null) runs all paper sources plus the patent
+# sources that are active: SureChEMBL always, KIPRIS only when its service key
+# is configured (see pipeline.default_sources). "kipris" is always a valid
+# source *value*; selecting it without a key simply runs nothing for KIPRIS.
+SearchSource = Literal["semantic_scholar", "crossref", "openalex", "surechembl", "kipris"]
 InputType = Literal["auto", "name", "smiles", "inchi", "inchi_key", "formula"]
 SortOrder = Literal["relevance", "citations", "year"]
 
@@ -370,7 +375,18 @@ def create_app(
     ttl_seconds: float = RECORD_TTL_SECONDS,
     max_records: int = MAX_RECORDS,
 ) -> FastAPI:
-    app = FastAPI(title="Chemical Literature Search API", version="0.2.0")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # Load the repo-root .env on server startup (not at import) so providers
+        # see SEMANTIC_SCHOLAR_API_KEY / CROSSREF_MAILTO / OPENALEX_MAILTO /
+        # KIPRIS_SERVICE_KEY etc. uvicorn does not read .env itself, and on WSL
+        # bash env vars do not reach a Windows python.exe process. Doing this in
+        # lifespan (vs import time) keeps test imports from picking up a local
+        # .env and polluting os.environ.
+        load_dotenv()
+        yield
+
+    app = FastAPI(title="Chemical Literature Search API", version="0.2.0", lifespan=lifespan)
     service = SearchService(pipeline, ttl_seconds=ttl_seconds, max_records=max_records)
     app.state.search_service = service
 
