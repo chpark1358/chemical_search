@@ -1,3 +1,5 @@
+"""Render a papers search report to JSON, CSV, or Markdown."""
+
 from __future__ import annotations
 
 import csv
@@ -7,8 +9,21 @@ import json
 from .models import SearchReport
 
 
+_FORMULA_INJECTION_PREFIXES = ("=", "+", "-", "@")
+
+
 def render_json(report: SearchReport) -> str:
     return json.dumps(report.to_dict(), indent=2, ensure_ascii=False)
+
+
+def _cell(value: object) -> str:
+    """Render a CSV cell, neutralizing spreadsheet formula injection."""
+    if value is None:
+        return ""
+    text = str(value)
+    if text.startswith(_FORMULA_INJECTION_PREFIXES):
+        return f"'{text}"
+    return text
 
 
 def render_csv(report: SearchReport) -> str:
@@ -17,98 +32,106 @@ def render_csv(report: SearchReport) -> str:
     writer.writerow(
         [
             "rank",
-            "kind",
             "title",
+            "authors",
+            "venue",
+            "year",
+            "doi",
+            "url",
+            "citations",
+            "source",
             "score",
-            "sources",
-            "source_url",
-            "evidence_count",
         ]
     )
-    for rank, item in enumerate(report.results, start=1):
+    for rank, paper in enumerate(report.papers, start=1):
         writer.writerow(
             [
                 rank,
-                item.kind,
-                item.title,
-                item.score,
-                "|".join(item.data.get("sources", [])),
-                item.source_url,
-                len(item.data.get("evidence", [])),
+                _cell(paper.title),
+                _cell("; ".join(paper.authors)),
+                _cell(paper.venue),
+                _cell(paper.year),
+                _cell(paper.doi),
+                _cell(paper.url),
+                _cell(paper.citations),
+                _cell(paper.source),
+                _cell(paper.score),
             ]
         )
     return output.getvalue()
 
 
 def render_markdown(report: SearchReport) -> str:
-    compound = report.selected_compound
+    compound = report.compound
     lines = [
-        "# Chemical Search POC Result",
+        "# 화학물질 논문 검색 결과",
         "",
-        "## Search",
+        "## 검색 정보",
         "",
-        f"- Query: `{report.query}`",
-        f"- Detected type: `{report.detected_type}`",
-        f"- Mode: `{report.mode}`",
-        f"- Status: `{report.status}`",
+        f"- 검색어: `{report.query}`",
+        f"- 입력 유형: `{report.detected_type}`",
+        f"- 상태: `{report.status}`",
         "",
-        "## Selected compound",
+        "## 화합물 정보",
         "",
     ]
     if compound:
         lines.extend(
             [
-                f"- Canonical SMILES: `{compound.canonical_smiles}`",
-                f"- InChIKey: `{compound.inchi_key}`",
-                f"- Formula: `{compound.formula}`",
-                f"- Molecular weight: `{compound.molecular_weight}`",
+                f"- 이름: {compound.name or '-'}",
+                f"- Canonical SMILES: `{compound.canonical_smiles or '-'}`",
+                f"- InChIKey: `{compound.inchi_key or '-'}`",
+                f"- 분자식: `{compound.formula or '-'}`",
+                f"- PubChem CID: `{compound.cid if compound.cid is not None else '-'}`",
             ]
         )
     else:
-        lines.append("- No compound could be selected and normalized.")
+        lines.append("- 화합물 정보를 확인하지 못했습니다.")
 
     lines.extend(
         [
             "",
-            "## Provider diagnostics",
+            "## 제공자 진단",
             "",
-            "| Source | Operation | Status | Items | Latency | Cached | Retries |",
-            "|---|---|---|---:|---:|---|---:|",
+            "| 제공자 | 상태 | 지연(ms) | 캐시 | 재시도 | 메시지 |",
+            "|---|---|---:|---|---:|---|",
         ]
     )
-    for result in report.provider_results:
+    for provider in report.providers:
         lines.append(
-            f"| {result.source} | {result.operation} | {result.status} | "
-            f"{len(result.items)} | {result.diagnostics.latency_ms} ms | "
-            f"{str(result.diagnostics.cached).lower()} | {result.diagnostics.retry_count} |"
+            f"| {provider.name} | {provider.status} | "
+            f"{provider.latency_ms if provider.latency_ms is not None else '-'} | "
+            f"{str(provider.cached).lower()} | {provider.retry_count} | "
+            f"{provider.message or '-'} |"
         )
 
-    lines.extend(["", "## Ranked results", ""])
-    for index, item in enumerate(report.results, start=1):
-        lines.append(f"### {index}. [{item.title}]({item.source_url})")
+    lines.extend(["", "## 논문 목록", ""])
+    if not report.papers:
+        lines.append("- 검색된 논문이 없습니다.")
+    for index, paper in enumerate(report.papers, start=1):
+        link = f"[{paper.title}]({paper.url})" if paper.url else paper.title
+        lines.append(f"### {index}. {link}")
         lines.append("")
-        lines.append(f"- Kind: `{item.kind}`")
-        lines.append(f"- Score: `{item.score}`")
-        lines.append(f"- Sources: `{', '.join(item.data.get('sources', []))}`")
-        lines.append("- Evidence:")
-        for evidence in item.data.get("evidence", []):
-            lines.append(
-                f"  - [{evidence['source']}/{evidence['operation']}]"
-                f"({evidence['source_url']}): {evidence['match_reason']}"
-            )
+        if paper.authors:
+            lines.append(f"- 저자: {', '.join(paper.authors)}")
+        lines.append(f"- 저널/학회: {paper.venue or '-'}")
+        lines.append(f"- 연도: {paper.year if paper.year is not None else '-'}")
+        lines.append(f"- DOI: {paper.doi or '-'}")
+        lines.append(f"- 인용 수: {paper.citations if paper.citations is not None else '-'}")
+        lines.append(f"- 출처: {paper.source} (score {paper.score})")
+        if paper.abstract:
+            abstract = paper.abstract.strip()
+            if len(abstract) > 400:
+                abstract = abstract[:400] + "..."
+            lines.append(f"- 초록: {abstract}")
         lines.append("")
 
-    lines.extend(["## Warnings", ""])
-    all_warnings = list(report.warnings)
-    if compound:
-        all_warnings.extend(compound.warnings)
-    for result in report.provider_results:
-        if result.diagnostics.message:
-            all_warnings.append(
-                f"{result.source}/{result.operation}: {result.diagnostics.message}"
-            )
-    if all_warnings:
-        lines.extend(f"- {warning}" for warning in all_warnings)
+    lines.extend(["## 경고", ""])
+    warnings = list(compound.warnings) if compound else []
+    if report.error:
+        warnings.append(report.error)
+    if warnings:
+        lines.extend(f"- {warning}" for warning in warnings)
     else:
-        lines.append("- None")
+        lines.append("- 없음")
     return "\n".join(lines) + "\n"

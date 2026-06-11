@@ -1,6 +1,6 @@
 # 오픈 이슈
 
-최종 업데이트: 2026-06-10
+최종 업데이트: 2026-06-11
 
 ## 높은 우선순위
 
@@ -21,42 +21,29 @@
 
 ### O-002: SureChEMBL API 안정성 검증
 
-상태: 미해결
+상태: 종결 (범위 제외, D-010)
 
 현재 결과:
 
-- `https://www.api.surechembl.org/` 호출 시 TLS certificate verification failure 발생
-
-확인 필요:
-
-- 현재 API endpoint와 응답 스키마
-- TLS 인증서 문제가 로컬 환경 문제인지 서버 설정 문제인지
-- rate limit
-- compound-patent association 조회 흐름
-- terms of use
+- `https://www.api.surechembl.org/` 호출 시 TLS certificate verification failure가 발생했었다.
+- 2026-06-11 papers-only 피벗으로 특허 검색이 범위에서 제외되어 추적을 종료한다.
 
 영향:
 
-통과하지 못하면 특허 검색은 MVP-2에서 제외하거나 링크아웃/수동 확인 보조로 낮춘다.
+특허 검색을 다시 범위에 넣는 경우에만 재오픈한다.
 
 ### O-003: EPO OPS 인증과 quota 확인
 
-상태: 미해결
+상태: 종결 (범위 제외, D-010)
 
 현재 결과:
 
-- `EPO_OPS_CONSUMER_KEY`, `EPO_OPS_CONSUMER_SECRET` 미설정으로 skipped
-
-확인 필요:
-
-- OAuth 등록 가능 여부
-- 무료 사용량
-- publication lookup 샘플
-- XML parsing 난이도
+- `EPO_OPS_CONSUMER_KEY`, `EPO_OPS_CONSUMER_SECRET` 미설정으로 skipped 상태였다.
+- 2026-06-11 papers-only 피벗으로 특허 메타데이터 보강이 범위에서 제외되어 추적을 종료한다.
 
 영향:
 
-patent metadata/family/legal 보강 가능 여부를 결정한다.
+특허 검색을 다시 범위에 넣는 경우에만 재오픈한다.
 
 ### O-007: Semantic Scholar API key 필요 여부
 
@@ -65,6 +52,7 @@ patent metadata/family/legal 보강 가능 여부를 결정한다.
 현재 결과:
 
 - 인증 없는 요청에서 HTTP 429 발생
+- papers-only 피벗으로 Semantic Scholar가 핵심 provider 2개 중 하나가 되어 중요도가 올라갔다.
 
 확인 필요:
 
@@ -74,7 +62,7 @@ patent metadata/family/legal 보강 가능 여부를 결정한다.
 
 영향:
 
-논문 검색 품질과 안정성에 영향이 있다.
+논문 검색 품질과 안정성에 직접 영향이 있다.
 
 ### O-008: 공개 provider rate limit과 재시도 정책
 
@@ -84,9 +72,10 @@ patent metadata/family/legal 보강 가능 여부를 결정한다.
 
 - Semantic Scholar는 인증 없는 요청에서 HTTP 429가 반복된다.
 - Crossref는 Phase 0 재실행 중 일시적으로 HTTP 429를 반환했지만 후속 POC 요청은 성공했다.
-- Phase 1 POC는 provider 실패를 partial 결과로 보존한다.
+- provider 실패를 partial 결과로 보존한다.
 - 성공 응답 file cache, 429/5xx/timeout retry, host 단위 요청 간격을 구현했다.
 - Crossref `mailto` 설정을 지원한다.
+- papers-only 피벗 후 대상 provider는 PubChem/Semantic Scholar/Crossref 3개다 (ChEMBL 제외).
 
 확인 필요:
 
@@ -96,7 +85,7 @@ patent metadata/family/legal 보강 가능 여부를 결정한다.
 
 영향:
 
-Phase 2 웹 서비스 전에 구현하지 않으면 반복 검색 시 결과 안정성이 떨어질 수 있다.
+반복 검색 시 결과 안정성에 영향이 있다.
 
 ### O-009: 검색 상태 저장소와 background job
 
@@ -107,6 +96,7 @@ Phase 2 웹 서비스 전에 구현하지 않으면 반복 검색 시 결과 안
 - FastAPI candidate selection/search 상태 계약을 구현했다.
 - 검색 상태는 프로세스 메모리에 저장된다.
 - FastAPI `BackgroundTasks`로 검색을 실행한다.
+- papers-only 재설계에서 상태값이 `needs_candidate_selection | running | done | partial | failed`로 변경된다 (`partial_failed` → `partial`).
 
 확인 필요:
 
@@ -150,6 +140,24 @@ IUPAC 입력을 MVP-1에 넣을지 best-effort로 둘지 결정한다.
 
 보안/프라이버시 설계와 데이터 모델에 영향이 있다.
 
+### O-010: FastAPI 무인증 노출
+
+상태: 미해결
+
+현재 결과:
+
+- FastAPI는 인증 없이 모든 엔드포인트를 노출하며 `127.0.0.1:8000` 로컬 실행을 전제로 한다.
+- Next.js rewrite(`/chemical-api`)도 접근 제어 없이 그대로 프록시한다.
+
+확인 필요:
+
+- 배포 시 인증/접근 제어 방식 (API key, reverse proxy, 네트워크 격리 등)
+- rate limit과 입력 크기 제한의 서버 측 강제
+
+영향:
+
+로컬 개발에는 문제가 없지만, 외부 배포 전에 반드시 보호 계층을 추가해야 한다.
+
 ## 낮은 우선순위
 
 ### O-006: PDF/image OCR 도입 시점
@@ -159,3 +167,19 @@ IUPAC 입력을 MVP-1에 넣을지 best-effort로 둘지 결정한다.
 현재 판단:
 
 OSRA/DECIMER 기반 구조 이미지 인식은 MVP 범위에서 제외한다.
+
+### O-011: `httpx2` 미사용 의존성
+
+상태: 미해결
+
+현재 결과:
+
+- `scripts/chemical_search/requirements-poc.txt`에 `httpx2==2.3.0`이 고정되어 있으나 코드에서 import하지 않는다.
+
+확인 필요:
+
+- papers-only 재설계(백엔드 작업)에서 제거
+
+영향:
+
+설치 시간과 의존성 표면이 불필요하게 늘어난다. 기능 영향은 없다.

@@ -15,8 +15,13 @@ class QualityFixtureTests(unittest.TestCase):
         cases = Path(__file__).resolve().parents[1] / "scripts/chemical_search/quality-cases.json"
         report = evaluate(cases)
 
-        self.assertEqual(report["summary"]["passed"], report["summary"]["total"])
-        self.assertEqual(report["summary"]["total"], 10)
+        self.assertGreater(report["summary"]["total"], 0)
+        failed_cases = [result["name"] for result in report["results"] if not result["passed"]]
+        self.assertEqual(
+            failed_cases,
+            [],
+            f"Failed quality cases: {', '.join(failed_cases)}",
+        )
 
 
 if __name__ == "__main__":

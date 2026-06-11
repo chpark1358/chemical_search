@@ -1,4 +1,7 @@
-﻿"""Phase 0 API spike for the chemical patent/literature search project.
+﻿# FROZEN HISTORICAL SPIKE — kept as-is for reference only. This script is NOT
+# maintained and is NOT part of the papers-only pipeline; do not refactor it
+# alongside scripts/chemical_search/{api,pipeline,providers}.py.
+"""Phase 0 API spike for the chemical patent/literature search project.
 
 This script validates the practical availability of the planned providers and
 writes both machine-readable JSON and a Markdown report. It is intentionally

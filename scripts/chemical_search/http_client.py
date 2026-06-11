@@ -1,25 +1,48 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import threading
 import time
-from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import requests
 
 from .cache import JsonFileCache
-from .models import ProviderDiagnostics
+from .models import HttpDiagnostics
+
+
+logger = logging.getLogger(__name__)
+
+_RETRYABLE_CONNECTION_ERRORS = (
+    requests.ConnectionError,
+    requests.exceptions.ChunkedEncodingError,
+)
 
 
 class ProviderHttpError(RuntimeError):
-    def __init__(self, status: str, message: str, diagnostics: ProviderDiagnostics):
+    """Raised when a provider request fails after retries.
+
+    ``status`` is one of: "rate_limited", "timeout", "not_found", "error".
+    Providers map these onto the public diagnostics statuses.
+    """
+
+    def __init__(
+        self,
+        status: str,
+        message: str,
+        diagnostics: HttpDiagnostics,
+        *,
+        http_status: int | None = None,
+    ):
         super().__init__(message)
         self.status = status
         self.diagnostics = diagnostics
+        self.http_status = http_status
 
 
 class HttpClient:
@@ -30,14 +53,15 @@ class HttpClient:
         cache_dir: Path | None = None,
         cache_enabled: bool = True,
         min_interval_seconds: float = 0.2,
-        sleep_fn=time.sleep,
-        monotonic_fn=time.monotonic,
+        sleep_fn: Callable[[float], None] = time.sleep,
+        monotonic_fn: Callable[[], float] = time.monotonic,
     ):
         self.timeout_seconds = timeout_seconds
         self.min_interval_seconds = min_interval_seconds
         self.sleep_fn = sleep_fn
         self.monotonic_fn = monotonic_fn
         self.last_request_at: dict[str, float] = {}
+        self._throttle_lock = threading.Lock()
         if cache_enabled and cache_dir is None:
             configured_cache = os.getenv("CHEMICAL_SEARCH_CACHE_DIR", "output/chemical-search/cache")
             cache_dir = Path(configured_cache) if configured_cache else None
@@ -45,7 +69,7 @@ class HttpClient:
             cache_dir = None
         self.cache = JsonFileCache(cache_dir)
         self.session = requests.Session()
-        user_agent = "chemical-search-poc/0.2"
+        user_agent = "chemical-search-poc/0.3"
         if contact := os.getenv("CROSSREF_MAILTO"):
             user_agent += f" (mailto:{contact})"
         self.session.headers.update({"user-agent": user_agent})
@@ -57,20 +81,15 @@ class HttpClient:
         headers: dict[str, str] | None = None,
         cache_ttl_seconds: int = 0,
         retries: int = 0,
-    ) -> tuple[dict[str, Any], ProviderDiagnostics]:
+    ) -> tuple[dict[str, Any], HttpDiagnostics]:
         started = time.perf_counter()
-        retrieved_at = datetime.now(timezone.utc).isoformat()
         request_headers = headers or {}
         cache_key = json.dumps([url, sorted(request_headers.items())], separators=(",", ":"))
         cached = self.cache.get(cache_key)
         if cached is not None:
-            return cached, ProviderDiagnostics(
-                latency_ms=int((time.perf_counter() - started) * 1000),
-                retrieved_at=retrieved_at,
-                cached=True,
-            )
+            return cached, self._diagnostics(started, 0, cached=True)
 
-        last_error: Exception | None = None
+        attempt = 0
         for attempt in range(retries + 1):
             self._throttle(url)
             try:
@@ -79,72 +98,118 @@ class HttpClient:
                     timeout=self.timeout_seconds,
                     headers=request_headers,
                 )
-                if response.status_code == 429 or response.status_code >= 500:
-                    last_error = requests.HTTPError(
-                        f"Retryable HTTP {response.status_code}.",
-                        response=response,
-                    )
-                    if attempt < retries:
-                        self.sleep_fn(self._retry_delay(response, attempt))
-                        continue
-                latency_ms = int((time.perf_counter() - started) * 1000)
-                diagnostics = ProviderDiagnostics(
-                    latency_ms=latency_ms,
-                    retrieved_at=retrieved_at,
-                    retry_count=attempt,
-                )
-                if response.status_code == 429:
-                    diagnostics.message = "Provider returned HTTP 429 after retries."
-                    raise ProviderHttpError(
-                        "rate_limited",
-                        "Provider returned HTTP 429 after retries.",
-                        diagnostics,
-                    )
-                response.raise_for_status()
-                data = response.json()
-                self.cache.set(cache_key, data, cache_ttl_seconds)
-                return data, diagnostics
             except requests.Timeout as exc:
-                last_error = exc
+                # ConnectTimeout subclasses both Timeout and ConnectionError;
+                # catching Timeout first classifies it as a timeout.
                 if attempt < retries:
                     self.sleep_fn(0.5 * (2**attempt))
                     continue
-                diagnostics = ProviderDiagnostics(
-                    latency_ms=int((time.perf_counter() - started) * 1000),
-                    retrieved_at=retrieved_at,
-                    retry_count=attempt,
-                    message=str(exc),
-                )
-                raise ProviderHttpError("timeout", "Provider request timed out.", diagnostics) from exc
-            except ProviderHttpError:
-                raise
-            except Exception as exc:
-                last_error = exc
-                if (
-                    isinstance(exc, requests.HTTPError)
-                    and exc.response is not None
-                    and exc.response.status_code >= 500
-                    and attempt < retries
-                ):
+                logger.warning("Provider request timed out after %d attempt(s).", attempt + 1)
+                raise ProviderHttpError(
+                    "timeout",
+                    "Provider request timed out.",
+                    self._diagnostics(started, attempt, message="Request timed out."),
+                ) from exc
+            except _RETRYABLE_CONNECTION_ERRORS as exc:
+                if attempt < retries:
                     self.sleep_fn(0.5 * (2**attempt))
                     continue
-                break
+                logger.warning(
+                    "Provider connection failed after %d attempt(s): %s",
+                    attempt + 1,
+                    type(exc).__name__,
+                )
+                raise ProviderHttpError(
+                    "error",
+                    "Provider connection failed.",
+                    self._diagnostics(
+                        started,
+                        attempt,
+                        message=f"Connection failed: {type(exc).__name__}.",
+                    ),
+                ) from exc
 
-        diagnostics = ProviderDiagnostics(
-            latency_ms=int((time.perf_counter() - started) * 1000),
-            retrieved_at=retrieved_at,
-            retry_count=attempt,
-            message=repr(last_error),
+            status_code = response.status_code
+            if status_code == 429 or status_code >= 500:
+                if attempt < retries:
+                    self.sleep_fn(self._retry_delay(response, attempt))
+                    continue
+                if status_code == 429:
+                    raise ProviderHttpError(
+                        "rate_limited",
+                        "Provider returned HTTP 429 after retries.",
+                        self._diagnostics(started, attempt, message="HTTP 429 after retries."),
+                        http_status=status_code,
+                    )
+                raise ProviderHttpError(
+                    "error",
+                    f"Provider returned HTTP {status_code} after retries.",
+                    self._diagnostics(started, attempt, message=f"HTTP {status_code} after retries."),
+                    http_status=status_code,
+                )
+            if status_code == 404:
+                # Providers such as PubChem signal "no results" with 404.
+                raise ProviderHttpError(
+                    "not_found",
+                    "Provider returned HTTP 404.",
+                    self._diagnostics(started, attempt, message="HTTP 404."),
+                    http_status=status_code,
+                )
+            if status_code >= 400:
+                raise ProviderHttpError(
+                    "error",
+                    f"Provider returned HTTP {status_code}.",
+                    self._diagnostics(started, attempt, message=f"HTTP {status_code}."),
+                    http_status=status_code,
+                )
+
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise ProviderHttpError(
+                    "error",
+                    "Provider returned invalid JSON.",
+                    self._diagnostics(started, attempt, message="Invalid JSON response."),
+                ) from exc
+            diagnostics = self._diagnostics(started, attempt)
+            # Cache failures must never affect request success; JsonFileCache.set
+            # swallows OSError internally, this guard covers unexpected paths.
+            try:
+                self.cache.set(cache_key, data, cache_ttl_seconds)
+            except OSError:
+                logger.warning("Cache write raised OSError; ignoring.", exc_info=True)
+            return data, diagnostics
+
+        raise ProviderHttpError(  # pragma: no cover - defensive, loop always returns/raises
+            "error",
+            "Provider request failed.",
+            self._diagnostics(started, attempt),
         )
-        raise ProviderHttpError("error", "Provider request failed.", diagnostics) from last_error
+
+    def _diagnostics(
+        self,
+        started: float,
+        retry_count: int,
+        *,
+        cached: bool = False,
+        message: str | None = None,
+    ) -> HttpDiagnostics:
+        return HttpDiagnostics(
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            cached=cached,
+            retry_count=retry_count,
+            message=message,
+        )
 
     def _throttle(self, url: str) -> None:
         host = urlparse(url).netloc
-        now = self.monotonic_fn()
-        wait_seconds = self.min_interval_seconds - (now - self.last_request_at.get(host, 0.0))
+        with self._throttle_lock:
+            now = self.monotonic_fn()
+            ready_at = max(now, self.last_request_at.get(host, 0.0) + self.min_interval_seconds)
+            wait_seconds = ready_at - now
+            self.last_request_at[host] = ready_at
         if wait_seconds > 0:
             self.sleep_fn(wait_seconds)
-        self.last_request_at[host] = self.monotonic_fn()
 
     def _retry_delay(self, response: requests.Response, attempt: int) -> float:
         retry_after = response.headers.get("retry-after")

@@ -1,6 +1,8 @@
-# Chemical Search POC
+# Chemical Literature Search (papers-only)
 
-Phase 1 CLI POC for compound normalization and public compound/literature search.
+Python pipeline that normalizes a chemical input (name, SMILES, InChI,
+InChIKey, or formula) via RDKit + PubChem and searches academic papers about
+the compound on Semantic Scholar + Crossref.
 
 ## Setup
 
@@ -10,60 +12,59 @@ Create the project-local Python 3.11 environment and run tests:
 & scripts\chemical_search\setup-poc.ps1
 ```
 
-Use `.venv-chemical\Scripts\python.exe` for reproducible POC commands.
+Use `.venv-chemical\Scripts\python.exe` for reproducible commands.
 
-## Run
-
-Search by name and run all ChEMBL structure search modes:
+## Run the CLI
 
 ```powershell
 $env:PYTHONUTF8='1'
-.venv-chemical\Scripts\python.exe -m scripts.chemical_search.poc_cli aspirin --mode all
+.venv-chemical\Scripts\python.exe -m scripts.chemical_search.poc_cli aspirin
 ```
 
-Search by formula and select a PubChem candidate by zero-based index:
+Search by formula; when multiple candidates resolve, the CLI lists them and
+asks you to pick one by id:
 
 ```powershell
-py -m scripts.chemical_search.poc_cli C9H8O4 --input-type formula --candidate-index 0
+py -m scripts.chemical_search.poc_cli C9H8O4 --input-type formula --candidate-id pubchem:2244
 ```
 
-Search by SMILES without Semantic Scholar:
+Options: `--sources semantic_scholar crossref`, `--sort relevance|citations|year`,
+`--limit 1..50`, `--no-cache`.
 
-```powershell
-py -m scripts.chemical_search.poc_cli "CC(=O)Oc1ccccc1C(=O)O" --no-semantic-scholar
-```
-
-Results are written to `output/chemical-search/poc/search-result.json`,
-`search-result.md`, and `search-result.csv`. Provider failures are recorded as
-partial results instead of terminating the entire search.
+Results are written to `output/chemical-search/poc/search-result.{json,csv,md}`.
+Provider failures are reported as `partial` results instead of terminating the
+entire search; `failed` means no provider returned anything usable.
 
 Successful provider responses are cached under `output/chemical-search/cache`.
 Cache file names are request hashes and cache payloads do not store request
-URLs or API keys. Disable cache for sensitive queries:
+URLs or API keys. Disable cache for sensitive queries with `--no-cache`.
+
+Set `CROSSREF_MAILTO` to identify requests to Crossref's polite pool and
+`SEMANTIC_SCHOLAR_API_KEY` for a higher Semantic Scholar rate limit.
+
+## Run the API
 
 ```powershell
-py -m scripts.chemical_search.poc_cli aspirin --no-cache
+.venv-chemical\Scripts\python.exe -m uvicorn scripts.chemical_search.api:app --port 8000
 ```
 
-Set `CROSSREF_MAILTO` to identify requests to Crossref's polite pool.
+The Next.js dev server proxies `/chemical-api/:path*` to this service.
+Endpoints: `POST /api/searches`, `GET /api/searches/{id}`,
+`POST /api/searches/{id}/select`, `GET /api/searches/{id}/export?format=csv|markdown|json`,
+`POST /api/chem/normalize`. OpenAPI docs at `http://127.0.0.1:8000/docs`.
+
+The in-memory search store assumes a single uvicorn worker; records expire
+after one hour (max 200 records).
 
 ## Test
 
 ```powershell
 $env:PYTHONUTF8='1'
-py -m unittest discover -s tests -p 'test*.py' -v
+.venv-chemical\Scripts\python.exe -m unittest discover -s tests -p 'test_chemical_search*.py' -v
 ```
 
-Run the 10-case normalization quality fixture:
+Run the normalization quality fixture:
 
 ```powershell
 .venv-chemical\Scripts\python.exe -m scripts.chemical_search.evaluate_quality
 ```
-
-Run the FastAPI service:
-
-```powershell
-.venv-chemical\Scripts\python.exe -m uvicorn scripts.chemical_search.api:app --reload --port 8000
-```
-
-OpenAPI documentation is available at `http://127.0.0.1:8000/docs`.

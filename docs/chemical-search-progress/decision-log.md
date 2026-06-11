@@ -163,3 +163,54 @@ Google Patents 웹 검색은 사람이 조사하기에는 유용하지만 일반
 ### 영향
 
 MVP-1 사용자는 Chemical Search 결과에서 Google Patents로 바로 이동할 수 있다. 특허 결과 자동 수집과 evidence 병합은 BigQuery 비용, 인증, 쿼리 범위를 검증한 뒤 MVP-2 provider로 구현한다.
+
+## D-010: 제품 스코프를 논문 전용(papers-only)으로 축소한다
+
+날짜: 2026-06-11
+상태: 확정
+
+### 결정
+
+특허 검색(SureChEMBL, EPO OPS, Google Patents 링크)과 ChEMBL 구조 검색(exact/similarity/substructure)을 제품 범위에서 제거한다. 파이프라인은 화학물질 입력(name/SMILES/InChI/InChIKey/formula)을 RDKit+PubChem으로 정규화하고, Semantic Scholar와 Crossref에서 논문만 검색한다.
+
+### 이유
+
+사용자 요구. 제품 목적을 "화학물질 기반 논문 검색" 하나로 좁혀 가치 검증에 집중한다. 특허 검색은 SureChEMBL TLS 장애(O-002)와 EPO OPS 인증 미해결(O-003)로 불확실성이 컸고, ChEMBL 구조 검색은 논문 탐색이라는 핵심 흐름에 필수가 아니다.
+
+### 영향
+
+pipeline/api/UI 재작업이 필요하다. 검색 상태값은 `needs_candidate_selection | running | done | partial | failed`로 단순화되고(`partial_failed`는 `partial`로 개명), similarity threshold와 ChEMBL 관련 파라미터는 제거된다. 이전 Phase 2 산출물 중 ChEMBL/특허 부분은 제거 대상이며, O-002/O-003은 범위 제외로 종결한다.
+
+## D-011: UI를 Linear 스타일로 재설계하고 루트 라우트로 이동한다
+
+날짜: 2026-06-11
+상태: 확정
+
+### 결정
+
+getdesign.md의 linear.app DESIGN.md를 기반으로 다크 테마 UI(캔버스 `#010102`, 라벤더 `#5e6ad2` 액센트, Inter + JetBrains Mono)를 새로 구현하고, 검색 화면을 기존 `/chemical` 라우트에서 루트 라우트 `/`로 이동한다.
+
+### 이유
+
+월드컵 앱 제거(D-012) 이후 저장소는 논문 검색 단일 제품이므로 `/chemical` 분리 라우트를 유지할 이유가 없다. 기존 UI는 ChEMBL 검색 모드와 threshold 등 제거된 기능을 전제로 설계되어 papers-only 계약에 맞게 재설계하는 편이 수정보다 빠르다.
+
+### 영향
+
+루트 페이지와 컴포넌트를 새로 작성하고 `/chemical` 라우트는 제거한다. FastAPI 엔드포인트 경로는 유지하되 record 스키마는 papers-only로 변경된다. `next.config.ts`의 `/chemical-api` rewrite는 그대로 유지한다.
+
+## D-012: 월드컵 앱을 저장소에서 제거한다
+
+날짜: 2026-06-11
+상태: 확정
+
+### 결정
+
+ideal-worldcup Next.js 앱(라우트, API, 관련 문서)을 저장소에서 제거했다. 제거 커밋은 `9cd47e2`이며, 필요하면 git 히스토리에서 복원할 수 있다.
+
+### 이유
+
+저장소를 화학물질 논문 검색 단일 제품으로 운영한다. 두 제품이 한 저장소에 있으면 의존성, 환경 변수, lint/테스트 명령이 섞여 검증 기준이 불명확해진다. 실제로 월드컵 앱의 lint/smoke 실패가 진행 기록에 노이즈로 남아 있었다.
+
+### 영향
+
+`src/`는 Chemical Search UI만 남는다. `DATABASE_URL`, `STORAGE_*`, `ADMIN_SESSION_SECRET` 등 월드컵용 환경 변수는 `.env.example`에서 제거한다. 제거 직전 상태는 베이스라인 커밋 `1c45ee5`와 git 히스토리로 추적한다.

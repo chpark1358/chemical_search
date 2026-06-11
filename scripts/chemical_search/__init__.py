@@ -1,4 +1,4 @@
-"""Chemical structure, compound, and literature search POC."""
+"""Papers-only chemical literature search (PubChem + RDKit + Semantic Scholar + Crossref)."""
 
 from .pipeline import SearchPipeline
 

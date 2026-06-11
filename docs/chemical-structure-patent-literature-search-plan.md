@@ -1,5 +1,13 @@
 # 화학 구조 기반 특허/논문 검색 서비스 기획 및 상세 설계
 
+> **[2026-06-11 스코프 변경 공지]**
+>
+> 2026-06-11부로 제품 스코프가 **논문 전용(papers-only)** 으로 축소됐다 (D-010, `docs/chemical-search-progress/decision-log.md`).
+>
+> - 특허 검색(SureChEMBL, EPO OPS, Google Patents)과 ChEMBL 구조 검색(exact/similarity/substructure)은 범위에서 제외됐다.
+> - 이 문서의 특허/구조검색 관련 내용은 과거 기획 기록으로만 유지하며 현재 구현 대상이 아니다.
+> - 실제 API 계약은 snake_case JSON이며, 기준은 FastAPI `/docs`(OpenAPI)와 `src/lib/api.ts`다.
+
 작성일: 2026-06-02
 수정일: 2026-06-02
 문서 목적: 화학식, 화합물명, SMILES/InChI, 직접 그린 구조를 입력받아 관련 특허와 논문을 찾는 웹 서비스의 가능 범위, 한계, MVP, 확장 설계를 개발 착수 가능한 수준으로 정리한다.

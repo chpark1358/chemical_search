@@ -1,100 +1,190 @@
 from __future__ import annotations
 
+import math
 import sys
 import unittest
-from datetime import datetime, timezone
 from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from chemical_search.models import (
-    NormalizedCompound,
-    ProviderDiagnostics,
-    ProviderResult,
-    SearchItem,
-)
-from chemical_search.results import merge_and_rank
+from chemical_search.models import UNTITLED_PAPER, PaperItem
+from chemical_search.results import merge_papers
 
 
-def diagnostics() -> ProviderDiagnostics:
-    return ProviderDiagnostics(1, datetime.now(timezone.utc).isoformat())
+def paper(
+    source: str,
+    *,
+    suffix: str = "1",
+    title: str = "Aspirin paper",
+    doi: str | None = None,
+    url: str | None = None,
+    citations: int | None = None,
+    year: int | None = None,
+    venue: str | None = None,
+    abstract: str | None = None,
+) -> PaperItem:
+    return PaperItem(
+        id=f"{source}:{suffix}",
+        title=title,
+        authors=[],
+        venue=venue,
+        year=year,
+        doi=doi,
+        url=url,
+        citations=citations,
+        abstract=abstract,
+        source=source,
+    )
 
 
-class ResultMergeTests(unittest.TestCase):
-    def setUp(self):
-        self.compound = NormalizedCompound(
-            original_input="aspirin",
-            detected_type="name",
-            canonical_smiles="CC(=O)Oc1ccccc1C(=O)O",
-            inchi_key="BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
-            formula="C9H8O4",
-            molecular_weight=180.159,
-        )
-
-    def test_compounds_are_merged_by_inchi_key_with_evidence(self):
-        pubchem = SearchItem(
-            "pubchem:2244",
-            "pubchem",
-            "compound",
-            "Aspirin",
-            "https://pubchem.example/2244",
-            "name candidate",
-            data={"inchi_key": self.compound.inchi_key},
-        )
-        chembl = SearchItem(
-            "chembl:25",
-            "chembl",
-            "compound",
-            "ASPIRIN",
-            "https://chembl.example/25",
-            "exact match",
-            data={"structures": {"standard_inchi_key": self.compound.inchi_key}},
-        )
-
-        results = merge_and_rank(
+class MergeTests(unittest.TestCase):
+    def test_duplicates_by_doi_are_case_insensitive(self):
+        merged = merge_papers(
             [
-                ProviderResult("pubchem", "resolve_name", "ok", [pubchem], diagnostics()),
-                ProviderResult("chembl", "exact", "ok", [chembl], diagnostics()),
-            ],
-            self.compound,
+                [paper("crossref", doi="10.1000/ABC", title="Title A")],
+                [paper("semantic_scholar", doi="10.1000/abc", title="Totally different")],
+            ]
         )
 
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0].data["sources"], ["pubchem", "chembl"])
-        self.assertEqual(len(results[0].data["evidence"]), 2)
+        self.assertEqual(len(merged), 1)
 
-    def test_papers_are_merged_by_doi_and_order_is_deterministic(self):
-        crossref = SearchItem(
-            "crossref:doi",
+    def test_semantic_scholar_record_is_preferred_and_enriched(self):
+        crossref = paper(
             "crossref",
-            "paper",
-            "Aspirin Paper",
-            "https://doi.org/10.1/example",
-            "bibliographic",
-            data={"doi": "10.1/example"},
+            doi="10.1/x",
+            title="Crossref title",
+            citations=99,
+            venue="J. Chem",
+            abstract="Crossref abstract",
         )
-        semantic = SearchItem(
-            "semantic:paper",
+        semantic = paper(
             "semantic_scholar",
-            "paper",
-            "Aspirin Paper",
-            "https://semantic.example/paper",
-            "bibliographic",
-            data={"external_ids": {"DOI": "10.1/EXAMPLE"}, "citation_count": 200},
+            doi="10.1/X",
+            title="Semantic title",
+            citations=None,
+            venue=None,
+            abstract=None,
         )
 
-        results = merge_and_rank(
+        merged = merge_papers([[crossref], [semantic]])
+
+        self.assertEqual(len(merged), 1)
+        result = merged[0]
+        self.assertEqual(result.source, "semantic_scholar")
+        self.assertEqual(result.title, "Semantic title")
+        self.assertEqual(result.citations, 99)
+        self.assertEqual(result.venue, "J. Chem")
+        self.assertEqual(result.abstract, "Crossref abstract")
+
+    def test_different_dois_with_same_title_are_not_merged(self):
+        merged = merge_papers(
             [
-                ProviderResult("crossref", "paper_search", "ok", [crossref], diagnostics()),
-                ProviderResult("semantic_scholar", "paper_search", "ok", [semantic], diagnostics()),
-            ],
-            self.compound,
+                [paper("semantic_scholar", doi="10.1/a", title="Same Title")],
+                [paper("crossref", doi="10.1/b", title="Same Title")],
+            ]
         )
 
-        self.assertEqual(len(results), 1)
-        self.assertEqual(len(results[0].data["evidence"]), 2)
-        self.assertGreater(results[0].score, 10)
+        self.assertEqual(len(merged), 2)
+
+    def test_missing_doi_falls_back_to_normalized_title(self):
+        merged = merge_papers(
+            [
+                [paper("semantic_scholar", doi=None, title="Aspirin: A Review!")],
+                [paper("crossref", doi="10.1/a", title="aspirin a review")],
+            ]
+        )
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0].source, "semantic_scholar")
+
+    def test_untitled_papers_without_doi_are_not_merged(self):
+        merged = merge_papers(
+            [
+                [paper("semantic_scholar", suffix="1", title=UNTITLED_PAPER)],
+                [paper("crossref", suffix="2", title=UNTITLED_PAPER)],
+            ]
+        )
+
+        self.assertEqual(len(merged), 2)
+
+    def test_merge_backfills_doi_url_and_year(self):
+        semantic = paper(
+            "semantic_scholar",
+            title="Shared Title",
+            doi=None,
+            url=None,
+            year=None,
+        )
+        crossref = paper(
+            "crossref",
+            title="Shared: Title!",
+            doi="10.1/back",
+            url="https://doi.org/10.1/back",
+            year=2021,
+        )
+
+        merged = merge_papers([[semantic], [crossref]])
+
+        self.assertEqual(len(merged), 1)
+        result = merged[0]
+        self.assertEqual(result.source, "semantic_scholar")
+        self.assertEqual(result.doi, "10.1/back")
+        self.assertEqual(result.url, "https://doi.org/10.1/back")
+        self.assertEqual(result.year, 2021)
+
+    def test_score_combines_rank_base_and_citation_boost(self):
+        merged = merge_papers(
+            [[paper("semantic_scholar", citations=999, title="Cited")]],
+        )
+
+        expected = 1.0 + 0.1 * math.log10(1000)
+        self.assertAlmostEqual(merged[0].score, expected, places=3)
+
+    def test_relevance_sort_ranks_first_results_higher(self):
+        merged = merge_papers(
+            [
+                [
+                    paper("semantic_scholar", suffix="1", title="First"),
+                    paper("semantic_scholar", suffix="2", title="Second"),
+                ]
+            ],
+            sort="relevance",
+        )
+
+        self.assertEqual([item.title for item in merged], ["First", "Second"])
+
+    def test_citations_sort_places_none_last(self):
+        merged = merge_papers(
+            [
+                [
+                    paper("semantic_scholar", suffix="1", title="No citations", citations=None),
+                    paper("semantic_scholar", suffix="2", title="Few", citations=3),
+                    paper("semantic_scholar", suffix="3", title="Many", citations=500),
+                ]
+            ],
+            sort="citations",
+        )
+
+        self.assertEqual([item.title for item in merged], ["Many", "Few", "No citations"])
+
+    def test_year_sort_is_descending_with_none_last(self):
+        merged = merge_papers(
+            [
+                [
+                    paper("semantic_scholar", suffix="1", title="Old", year=1999),
+                    paper("semantic_scholar", suffix="2", title="New", year=2024),
+                    paper("semantic_scholar", suffix="3", title="Unknown", year=None),
+                ]
+            ],
+            sort="year",
+        )
+
+        self.assertEqual([item.title for item in merged], ["New", "Old", "Unknown"])
+
+    def test_unknown_sort_raises(self):
+        with self.assertRaises(ValueError):
+            merge_papers([[paper("semantic_scholar")]], sort="alphabetical")
 
 
 if __name__ == "__main__":

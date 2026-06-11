@@ -1,5 +1,45 @@
 # 개발 진행 로그
 
+## 2026-06-11: 논문 전용(papers-only) 피벗과 재설계 착수
+
+상태: 진행 중
+
+### 목적
+
+제품 스코프를 화학물질 기반 논문 검색으로 축소하고, 저장소/문서/계약을 새 스코프 기준으로 재정렬한다.
+
+### 진행 내용
+
+- Phase 1-2 작업을 베이스라인 커밋 `1c45ee5`로 스냅샷 (`.gitattributes` LF 정규화 포함)
+- 월드컵 앱을 커밋 `9cd47e2`에서 제거 (git 히스토리로 복원 가능)
+- 피벗 결정 3건 기록: D-010 논문 전용 축소, D-011 Linear 스타일 루트 UI 재설계, D-012 월드컵 앱 제거
+- API 계약을 papers-only로 재정의: 상태값 `needs_candidate_selection | running | done | partial | failed` (`partial_failed` → `partial` 개명), ChEMBL/threshold 파라미터 제거
+- 루트 라우트 `/` Linear 스타일 UI와 FastAPI papers-only 스키마 재작업 진행 중
+- 루트 `README.md` 신규 작성, `.env.example` 월드컵 변수 제거, `AGENTS.md` 구조/검증 명령/문서 갱신 의무 추가
+- 진행 문서(current-status, phase-status, decision-log, open-issues)를 새 스코프 기준으로 갱신
+
+### 기록 정정
+
+- 2026-06-10 GitHub 설정 항목에 기록된 초기 커밋 `13a31c5`는 현재 git 히스토리에 존재하지 않는다. 실제 기준 커밋은 `b2963ad`다 (히스토리 정리로 추정).
+
+### 변경 파일
+
+- `README.md` (신규)
+- `.env.example`
+- `AGENTS.md`
+- `docs/chemical-search-progress/` 전반
+- `docs/chemical-structure-patent-literature-search-plan.md` (스코프 변경 공지 추가)
+
+### 검증
+
+- 문서 정비 작업으로 코드 검증 없음. 백엔드/프론트 재작업의 lint/테스트 결과는 해당 작업 종료 시 기록한다.
+
+### 다음 작업
+
+1. FastAPI papers-only 계약 구현과 테스트 통과
+2. 루트 라우트 Linear 스타일 UI 구현과 브라우저 검증
+3. `httpx2` 미사용 의존성 제거 (O-011)
+
 ## 2026-06-10: 출처 신뢰도와 자료 처리 흐름 안내 UI 추가
 
 상태: 완료
