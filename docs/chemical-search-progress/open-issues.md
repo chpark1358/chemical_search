@@ -192,22 +192,23 @@ OSRA/DECIMER 기반 구조 이미지 인식은 MVP 범위에서 제외한다.
 
 ### O-012: KIPRIS_SERVICE_KEY 미발급 시 한국 특허 비활성
 
-상태: 대기 (사용자 키 발급 필요)
+상태: 해결 (키 설정 완료, 2026-06-11 라이브 검증)
 
 현재 결과:
 
-- 한국 특허 검색(KIPRIS)은 환경 변수 `KIPRIS_SERVICE_KEY`가 설정된 경우에만 동작한다(D-016).
-- 현재 키가 없어 KIPRIS 소스는 비활성 상태다(오류 아님). `providers[]`/`patents[]`에서 제외되고, 키가 없으면 기본 source에도 포함되지 않는다.
-- data.go.kr '특허실용신안 정보 검색 서비스' 활용신청으로 개발단계 키가 자동 승인되며, 발급된 일반 인증키를 `KIPRIS_SERVICE_KEY`에 넣으면 KIPRIS 특허가 특허 탭에 SureChEMBL과 함께 표시된다.
+- 한국 특허 검색(KIPRIS)은 환경 변수 `KIPRIS_SERVICE_KEY`(KIPRIS Plus AccessKey)가 설정된 경우에만 동작한다(D-016).
+- 2026-06-11 KIPRIS Plus AccessKey를 설정하고 라이브로 검증했다. `freeSearchInfo` 응답이 `resultCode == "00"`로 정상 반환되며 한국 특허가 조회됐다. 키가 설정돼 KIPRIS는 현재 활성 상태이고, 특허 탭에 SureChEMBL과 함께 한국 특허가 표시된다.
+- AccessKey는 plus.kipris.or.kr 가입 후 'API KEY 관리'에서 발급받은 KIPRIS Plus "REST AccessKey"다(data.go.kr 활용신청이 아니다). 발급된 키를 `KIPRIS_SERVICE_KEY`에 넣으면 KIPRIS 특허가 특허 탭에 SureChEMBL과 함께 표시된다.
+- 새로 발급한 KIPRIS Plus 키는 활성화까지 시간이 걸릴 수 있다.
 
 확인 필요:
 
-- 사용자 키 발급 후 라이브 검증(단어 검색 응답, totalCount, 상태 분류)
-- 개발단계 약 월 1,000회 호출 한도 내 throttle 적정성
+- 운영 환경에서 KIPRIS Plus 호출 한도 내 throttle 적정성
+- `TotalSearchCount`가 큰 키워드의 페이지네이션/표시 범위
 
 영향:
 
-키가 없으면 한국 특허 결과만 비어 있고 나머지 검색(논문, SureChEMBL 특허)은 정상 동작한다.
+키가 설정돼 한국 특허가 정상 조회된다. 키가 없으면 한국 특허 결과만 비어 있고 나머지 검색(논문, SureChEMBL 특허)은 정상 동작한다.
 
 ### O-013: Wikidata 한글명 커버리지 한계
 

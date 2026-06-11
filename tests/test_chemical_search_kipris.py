@@ -26,65 +26,69 @@ from chemical_search.providers import (
 )
 
 
+# KIPRIS Plus REST freeSearchInfo response shape: resultCode "00" on success,
+# rows are <PatentUtilityInfo> under body/items, total in <count>/<TotalSearchCount>.
 KIPRIS_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <response>
   <header>
-    <successYN>Y</successYN>
+    <requestMsgID/>
+    <responseTime>2026-06-11 17:45:20</responseTime>
+    <successYN/>
     <resultCode>00</resultCode>
-    <resultMsg>NORMAL SERVICE</resultMsg>
+    <resultMsg>success</resultMsg>
   </header>
   <body>
     <items>
-      <item>
-        <inventionTitle>아스피린 제조 방법</inventionTitle>
-        <applicantName>한국화학연구원</applicantName>
-        <applicationNumber>1020200012345</applicationNumber>
-        <applicationDate>20200101</applicationDate>
-        <openNumber>1020210099999</openNumber>
-        <openDate>20210701</openDate>
-        <publicationNumber>1020220011111</publicationNumber>
-        <publicationDate>20220301</publicationDate>
-        <registerStatus>등록</registerStatus>
-        <astrtCont>아스피린의 합성에 관한 초록</astrtCont>
-        <ipcNumber>C07C 51/00</ipcNumber>
-      </item>
-      <item>
-        <inventionTitle>이부프로펜 조성물</inventionTitle>
-        <applicantName></applicantName>
-        <applicationNumber>2020100054321</applicationNumber>
-        <applicationDate></applicationDate>
-        <registerStatus>공개</registerStatus>
-      </item>
+      <PatentUtilityInfo>
+        <InventionName>아스피린 제조 방법</InventionName>
+        <Applicant>한국화학연구원</Applicant>
+        <ApplicationNumber>1020200012345</ApplicationNumber>
+        <ApplicationDate>20200101</ApplicationDate>
+        <OpeningNumber>1020210099999</OpeningNumber>
+        <OpeningDate>20210701</OpeningDate>
+        <PublicNumber>1020220011111</PublicNumber>
+        <PublicDate>20220301</PublicDate>
+        <RegistrationStatus>등록</RegistrationStatus>
+        <Abstract>아스피린의 합성에 관한 초록</Abstract>
+        <InternationalpatentclassificationNumber>C07C 51/00</InternationalpatentclassificationNumber>
+      </PatentUtilityInfo>
+      <PatentUtilityInfo>
+        <InventionName>이부프로펜 조성물</InventionName>
+        <Applicant></Applicant>
+        <ApplicationNumber>2020100054321</ApplicationNumber>
+        <ApplicationDate></ApplicationDate>
+        <RegistrationStatus>공개</RegistrationStatus>
+      </PatentUtilityInfo>
     </items>
-    <numOfRows>10</numOfRows>
-    <pageNo>1</pageNo>
-    <totalCount>1234</totalCount>
   </body>
+  <count>
+    <TotalSearchCount>1234</TotalSearchCount>
+    <PageNo>1</PageNo>
+    <NumOfRows>10</NumOfRows>
+  </count>
 </response>
 """
 
 KIPRIS_EMPTY_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <response>
   <header>
-    <successYN>Y</successYN>
     <resultCode>00</resultCode>
-    <resultMsg>NORMAL SERVICE</resultMsg>
+    <resultMsg>success</resultMsg>
   </header>
   <body>
     <items></items>
-    <numOfRows>0</numOfRows>
-    <pageNo>1</pageNo>
-    <totalCount>0</totalCount>
   </body>
+  <count>
+    <TotalSearchCount>0</TotalSearchCount>
+  </count>
 </response>
 """
 
 KIPRIS_ERROR_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <response>
   <header>
-    <successYN>N</successYN>
-    <resultCode>30</resultCode>
-    <resultMsg>SERVICE KEY IS NOT REGISTERED ERROR</resultMsg>
+    <resultCode>10</resultCode>
+    <resultMsg>INVALID_REQUEST_PARAMETER_ERROR</resultMsg>
   </header>
   <body></body>
 </response>
@@ -186,8 +190,8 @@ class KiprisParsingTests(unittest.TestCase):
             provider.search_patents(word="아스피린", limit=7)
 
         url = http.urls[0]
-        self.assertIn("getWordSearch", url)
-        self.assertIn("ServiceKey=my-key", url)
+        self.assertIn("freeSearchInfo", url)
+        self.assertIn("accessKey=my-key", url)
         self.assertIn("numOfRows=7", url)
         self.assertIn("pageNo=1", url)
         self.assertIn("patent=true", url)
@@ -223,7 +227,7 @@ class KiprisParsingTests(unittest.TestCase):
         self.assertEqual(total_hits, 0)
         self.assertEqual(diagnostics.status, "empty")
 
-    def test_success_n_is_error_and_message_sanitized(self):
+    def test_error_result_code_is_error_and_message_sanitized(self):
         http = FakeTextHttp([KIPRIS_ERROR_XML])
         provider = KiprisProvider(http)
 
@@ -234,7 +238,7 @@ class KiprisParsingTests(unittest.TestCase):
         self.assertIsNone(total_hits)
         self.assertEqual(diagnostics.status, "error")
         # The upstream resultMsg must not leak to the client message.
-        self.assertNotIn("SERVICE KEY", diagnostics.message or "")
+        self.assertNotIn("INVALID_REQUEST", diagnostics.message or "")
 
     def test_malformed_xml_is_error(self):
         http = FakeTextHttp(["<not-xml<<<"])
@@ -250,10 +254,11 @@ class KiprisParsingTests(unittest.TestCase):
     def test_url_falls_back_to_kipris_search_when_no_number(self):
         no_number_xml = """<?xml version="1.0"?>
         <response>
-          <header><successYN>Y</successYN><resultCode>00</resultCode></header>
+          <header><resultCode>00</resultCode></header>
           <body><items>
-            <item><inventionTitle>제목만 있는 특허</inventionTitle></item>
-          </items><totalCount>1</totalCount></body>
+            <PatentUtilityInfo><InventionName>제목만 있는 특허</InventionName></PatentUtilityInfo>
+          </items></body>
+          <count><TotalSearchCount>1</TotalSearchCount></count>
         </response>"""
         http = FakeTextHttp([no_number_xml])
         provider = KiprisProvider(http)
@@ -268,10 +273,11 @@ class KiprisParsingTests(unittest.TestCase):
     def test_no_title_uses_placeholder(self):
         no_title_xml = """<?xml version="1.0"?>
         <response>
-          <header><successYN>Y</successYN><resultCode>00</resultCode></header>
+          <header><resultCode>00</resultCode></header>
           <body><items>
-            <item><applicationNumber>1020200012345</applicationNumber></item>
-          </items><totalCount>1</totalCount></body>
+            <PatentUtilityInfo><ApplicationNumber>1020200012345</ApplicationNumber></PatentUtilityInfo>
+          </items></body>
+          <count><TotalSearchCount>1</TotalSearchCount></count>
         </response>"""
         http = FakeTextHttp([no_title_xml])
         provider = KiprisProvider(http)

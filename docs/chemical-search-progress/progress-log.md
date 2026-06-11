@@ -13,11 +13,13 @@
 - 한글 물질명 입력 결정 기록 (D-015): 질의에 한글이 포함되면 기존 PubChem 이름 조회 이전에 Wikidata SPARQL로 한글명→PubChem CID/InChIKey를 해석하고, 실패 시 PubChem 이름 조회로 폴백. API key 불필요
 - Wikidata 라이브 검증: 아스피린→CID 2244 / BSYNRYMUTXBXSQ-UHFFFAOYSA-N, 카페인→2519, 이부프로펜→3672, 아세트아미노펜→1983. 타이레놀·포도당 등 브랜드/통용명 일부 미매칭 확인
 - Wikidata 해석 시 `compound.warnings`에 해석 안내 추가, `query.wikidata.org` throttle(>=1.0s, polite)과 User-Agent 정의. 영문/SMILES/InChI/InChIKey/분자식 입력 무회귀 원칙 명시
-- 한국 특허 검색 결정 기록 (D-016): 새 특허 source `kipris`, data.go.kr '특허실용신안 정보 검색 서비스'(`kipo-api.kipi.or.kr`) 단어 검색, 한글이면 한글명·아니면 compound.name으로 키워드 검색(특허+실용신안)
+- 한국 특허 검색 결정 기록 (D-016): 새 특허 source `kipris`, KIPRIS Plus REST API의 단어 검색 오퍼레이션 `freeSearchInfo`(엔드포인트 `http://plus.kipris.or.kr/openapi/rest/patUtiModInfoSearchSevice/freeSearchInfo`), 한글이면 한글명·아니면 compound.name으로 키워드(`word`) 검색(특허+실용신안). 요청 파라미터: word, patent=true, utility=true, pageNo=1, numOfRows, accessKey
+- 인증은 KIPRIS Plus AccessKey(`accessKey` 파라미터). plus.kipris.or.kr 가입 후 'API KEY 관리'에서 발급받은 "REST AccessKey"이며(data.go.kr 활용신청 아님), `KIPRIS_SERVICE_KEY`에 저장(변수 이름 그대로)
 - KIPRIS는 `KIPRIS_SERVICE_KEY`가 설정된 경우에만 동작(키 게이트). 미설정 시 비활성(오류 아님, providers[]/patents[]·기본 source에서 제외)
-- XML(data.go.kr 표준 envelope) 방어적 파싱과 `PatentItem` 매핑(title/assignee/publication_number/date/source="kipris"/url), `totalCount`를 kipris의 patents_total_hits 기여분으로 정의. successYN!=Y 또는 resultCode!=00 → error
-- O-012(KIPRIS 키 미발급 시 비활성, 상태 '대기')와 O-013(Wikidata 한글명 커버리지 한계) 추가
-- `.env.example`에 `KIPRIS_SERVICE_KEY` 추가, `README.md`에 한글 입력(Wikidata)·한국 특허(KIPRIS, 선택 키)·외부 네트워크(query.wikidata.org, kipo-api.kipi.or.kr) 반영
+- KIPRIS XML envelope 방어적 파싱과 `PatentItem` 매핑(title=InventionName/assignee=Applicant/publication_number=PublicNumber·OpeningNumber·RegistrationNumber·ApplicationNumber/date=ApplicationDate(YYYYMMDD→YYYY-MM-DD)/source="kipris"/url=Google Patents KR 링크 또는 KIPRIS 검색 폴백). 행은 `<PatentUtilityInfo>`, 전체 건수는 `<count>` 안의 `<TotalSearchCount>`이며 이를 kipris의 patents_total_hits 기여분으로 정의(SureChEMBL 값과 합산). 성공은 resultCode=="00"(successYN 없음), resultCode!="00" → error(resultMsg 로깅, 클라이언트 메시지는 sanitize)
+- 병합 후 특허 목록은 더 이상 `limit`로 전역 캡을 걸지 않음. 각 특허 source가 최대 `limit`건씩 기여해 SureChEMBL이 KIPRIS를 밀어내지 않도록 함(라이브 검증: 아스피린 → surechembl 20 + kipris 30 = 특허 50건, total_hits 707,590)
+- O-012(KIPRIS 키 설정·라이브 검증 완료, 상태 '해결')와 O-013(Wikidata 한글명 커버리지 한계) 갱신
+- `.env.example`에 `KIPRIS_SERVICE_KEY`(KIPRIS Plus AccessKey) 추가, `README.md`에 한글 입력(Wikidata)·한국 특허(KIPRIS, 선택 키)·외부 네트워크(query.wikidata.org, plus.kipris.or.kr) 반영
 
 ### 변경 파일
 
@@ -30,7 +32,7 @@
 
 ### 검증
 
-- 문서 정비 작업으로 코드 검증 없음. Wikidata 입력 해석/KIPRIS provider 구현의 lint/테스트 결과는 해당 작업 종료 시 기록한다. KIPRIS는 사용자 키 발급 후 fixture/라이브 검증한다(O-012).
+- 문서 정비 작업으로 코드 검증 없음. Wikidata 입력 해석/KIPRIS provider 구현의 lint/테스트 결과는 해당 작업 종료 시 기록한다. KIPRIS는 2026-06-11 KIPRIS Plus AccessKey로 라이브 검증 완료(resultCode 00, 한국 특허 반환; 아스피린 → surechembl 20 + kipris 30 = 특허 50건, total_hits 707,590). 새로 발급한 KIPRIS Plus 키는 활성화까지 시간이 걸릴 수 있다(O-012).
 
 ### 다음 작업
 

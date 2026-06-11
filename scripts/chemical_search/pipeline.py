@@ -254,8 +254,13 @@ class SearchPipeline:
                 total_hits_parts.append(kipris_total)
             diagnostics.append(kipris_diagnostics)
 
-        # Dedup across SureChEMBL + KIPRIS by publication number, then cap.
-        patents = dedup_patents(patent_items)[:limit]
+        # Dedup across SureChEMBL + KIPRIS by publication number. Each provider
+        # already returns at most ``limit`` rows, so we do NOT re-cap the merged
+        # list to ``limit`` — that would let the first source (SureChEMBL) fill
+        # every slot and crowd KIPRIS out entirely. Keeping each source's
+        # contribution lets the 특허 tab show both global and Korean patents
+        # (the UI filters by source).
+        patents = dedup_patents(patent_items)
         # patents_total_hits is the sum of each patent source's reported total;
         # None when no patent source reported a count (e.g. none selected).
         patents_total_hits = sum(total_hits_parts) if total_hits_parts else None

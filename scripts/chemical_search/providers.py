@@ -564,16 +564,19 @@ def is_kipris_enabled() -> bool:
 class KiprisProvider:
     """KIPRIS (Korean Intellectual Property Rights Information Service) search.
 
-    Free-text patent + utility-model search against the data.go.kr KIPRIS
-    OpenAPI ``getWordSearch`` endpoint. The endpoint returns the data.go.kr
-    standard XML envelope, parsed defensively with ``xml.etree``. The provider
-    only runs when ``KIPRIS_SERVICE_KEY`` is set (see ``is_kipris_enabled``).
+    Free-text patent + utility-model search against the KIPRIS Plus REST
+    ``patUtiModInfoSearchSevice/freeSearchInfo`` endpoint, authenticated with a
+    KIPRIS Plus ``accessKey`` (stored in ``KIPRIS_SERVICE_KEY``). The response
+    is a KIPRIS XML envelope (``resultCode`` 00 on success, ``PatentUtilityInfo``
+    rows under ``body/items``), parsed defensively with ``xml.etree``. The
+    provider only runs when ``KIPRIS_SERVICE_KEY`` is set (see
+    ``is_kipris_enabled``).
     """
 
     name = "kipris"
     base_url = (
-        "http://kipo-api.kipi.or.kr/openapi/service/"
-        "patUtiModInfoSearchSevice/getWordSearch"
+        "http://plus.kipris.or.kr/openapi/rest/"
+        "patUtiModInfoSearchSevice/freeSearchInfo"
     )
 
     def __init__(self, http: HttpClient):
@@ -587,22 +590,22 @@ class KiprisProvider:
     ) -> tuple[list[PatentItem], int | None, ProviderDiagnostics]:
         """Search KIPRIS for ``word`` and return ``(patents, total_hits, diag)``.
 
-        ``total_hits`` is the envelope ``totalCount``. A ``successYN`` other
-        than "Y" (or a non-"00" result code) is treated as an error, with the
-        upstream message logged server-side but not surfaced to clients.
+        ``total_hits`` is the envelope ``TotalSearchCount``. A non-"00" result
+        code is treated as an error, with the upstream message logged
+        server-side but not surfaced to clients.
         """
-        service_key = (os.getenv(KIPRIS_SERVICE_KEY_ENV) or "").strip()
+        access_key = (os.getenv(KIPRIS_SERVICE_KEY_ENV) or "").strip()
         # Defensive: callers gate on is_kipris_enabled(), but guard anyway so a
         # direct call without a key produces a clean "empty" rather than a
         # confusing upstream auth error.
-        if not service_key:
+        if not access_key:
             no_call = HttpDiagnostics(latency_ms=0, cached=False, retry_count=0)
             return [], None, ProviderDiagnostics.from_http(self.name, "empty", no_call)
 
         url = (
             f"{self.base_url}"
             f"?word={quote(word, safe='')}"
-            f"&ServiceKey={quote(service_key, safe='')}"
+            f"&accessKey={quote(access_key, safe='')}"
             f"&numOfRows={limit}"
             "&pageNo=1"
             "&patent=true"
@@ -628,13 +631,12 @@ class KiprisProvider:
                 message="KIPRIS 응답을 해석할 수 없습니다.",
             )
 
-        success = self._text(root.find("./header/successYN"))
-        result_code = self._text(root.find("./header/resultCode"))
-        if (success and success != "Y") or (result_code and result_code != "00"):
-            result_msg = self._text(root.find("./header/resultMsg")) or "(메시지 없음)"
+        # KIPRIS Plus uses resultCode "00" for success (there is no successYN).
+        result_code = self._text(root.find(".//resultCode"))
+        if result_code and result_code != "00":
+            result_msg = self._text(root.find(".//resultMsg")) or "(메시지 없음)"
             logger.warning(
-                "KIPRIS request failed: successYN=%s resultCode=%s resultMsg=%s",
-                success,
+                "KIPRIS request failed: resultCode=%s resultMsg=%s",
                 result_code,
                 result_msg,
             )
@@ -645,18 +647,24 @@ class KiprisProvider:
                 message="KIPRIS 검색에 실패했습니다.",
             )
 
-        items = root.findall("./body/items/item")
+        items = root.findall(".//PatentUtilityInfo")
         patents = [self._patent(item) for item in items]
-        total_hits = self._int(self._text(root.find("./body/totalCount")))
+        total_hits = self._int(self._text(root.find(".//TotalSearchCount")))
         status = "ok" if patents else "empty"
         return patents, total_hits, ProviderDiagnostics.from_http(self.name, status, http)
 
     def _patent(self, item: ElementTree.Element) -> PatentItem:
-        title = self._text(item.find("inventionTitle")) or UNTITLED_PATENT
-        assignee = self._text(item.find("applicantName"))
-        application_number = self._text(item.find("applicationNumber"))
-        publication_number = self._text(item.find("publicationNumber")) or application_number
-        application_date = self._format_date(self._text(item.find("applicationDate")))
+        title = self._text(item.find("InventionName")) or UNTITLED_PATENT
+        assignee = self._text(item.find("Applicant"))
+        application_number = self._text(item.find("ApplicationNumber"))
+        # Prefer a published/registered number for the public-facing link.
+        publication_number = (
+            self._text(item.find("PublicNumber"))
+            or self._text(item.find("OpeningNumber"))
+            or self._text(item.find("RegistrationNumber"))
+            or application_number
+        )
+        application_date = self._format_date(self._text(item.find("ApplicationDate")))
         return PatentItem(
             id=application_number or publication_number or UNTITLED_PATENT,
             publication_number=publication_number or "",

@@ -21,10 +21,10 @@
 
 - Node.js 20 이상, npm
 - Python 3.11
-- 외부 네트워크 접근: PubChem, Semantic Scholar, Crossref, OpenAlex, SureChEMBL(`www.surechembl.org`), Wikidata(`query.wikidata.org`), KIPRIS(`kipo-api.kipi.or.kr`)
+- 외부 네트워크 접근: PubChem, Semantic Scholar, Crossref, OpenAlex, SureChEMBL(`www.surechembl.org`), Wikidata(`query.wikidata.org`), KIPRIS Plus(`plus.kipris.or.kr`)
 - SureChEMBL과 Wikidata(한글 물질명 해석)는 API key가 필요 없다.
 - KIPRIS 한국 특허 검색은 `KIPRIS_SERVICE_KEY`가 설정된 경우에만 동작한다(선택). 미설정 시 KIPRIS 소스는 비활성화되며 나머지 검색은 정상 동작한다.
-- KIPRIS 키 발급: data.go.kr에서 '특허실용신안 정보 검색 서비스' 활용신청을 하면 개발단계 키가 자동 승인된다(무료, 개발 단계 약 월 1,000회 호출). 발급된 일반 인증키를 `KIPRIS_SERVICE_KEY`에 넣는다.
+- KIPRIS 키 발급: `plus.kipris.or.kr` 가입 후 'API KEY 관리'에서 REST AccessKey를 발급받아(무료, 한도 내 사용) `KIPRIS_SERVICE_KEY`에 넣는다. 엔드포인트는 KIPRIS Plus REST `patUtiModInfoSearchSevice/freeSearchInfo`이며, 발급 직후 키 활성화에 시간이 걸릴 수 있다.
 
 ## 설치
 
@@ -95,7 +95,7 @@ npm run dev
 | `OPENALEX_MAILTO` | 선택 | OpenAlex polite pool 식별용 이메일. 미설정 시 `CROSSREF_MAILTO`를 사용한다. |
 | `CHEMICAL_SEARCH_CACHE_DIR` | 선택 | provider 응답 캐시 디렉터리. 기본값 `output/chemical-search/cache` |
 | `CHEMICAL_API_URL` | 선택 | Next.js rewrite 대상 FastAPI 주소. 기본값 `http://127.0.0.1:8000` |
-| `KIPRIS_SERVICE_KEY` | 선택 | 한국 특허(KIPRIS) 검색용 서비스 키. data.go.kr '특허실용신안 정보 검색 서비스' 활용신청으로 발급한다. 미설정 시 KIPRIS 소스는 비활성화된다(오류 아님). 한글 물질명 입력(Wikidata)에는 키가 필요 없다. |
+| `KIPRIS_SERVICE_KEY` | 선택 | 한국 특허(KIPRIS) 검색용 KIPRIS Plus REST AccessKey. `plus.kipris.or.kr` 'API KEY 관리'에서 발급한다. 미설정 시 KIPRIS 소스는 비활성화된다(오류 아님). 한글 물질명 입력(Wikidata)에는 키가 필요 없다. |
 
 ## 테스트
 

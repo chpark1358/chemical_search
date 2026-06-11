@@ -289,21 +289,22 @@ SureChEMBL만 추가한다. EPO OPS와 ChEMBL 구조 검색(exact/similarity/sub
 
 ### 결정
 
-한국 특허 검색을 위해 새 특허 source `kipris`를 추가한다. data.go.kr '특허실용신안 정보 검색 서비스'(`kipo-api.kipi.or.kr`)의 단어 검색 엔드포인트를 사용하며, 사용자 입력이 한글이면 한글명, 아니면 `compound.name`을 키워드로 검색한다(특허+실용신안 포함). KIPRIS는 환경 변수 `KIPRIS_SERVICE_KEY`가 설정된 경우에만 동작하고, 미설정 시 provider가 비활성화된다(오류 아님, `providers[]`/`patents[]`에서 제외, 키 없을 때 기본 source에도 미포함). 특허는 논문과 분리된 특허 탭에 SureChEMBL(글로벌)과 함께 표시된다.
+한국 특허 검색을 위해 새 특허 source `kipris`를 추가한다. KIPRIS Plus REST API의 단어 검색 오퍼레이션 `freeSearchInfo`(엔드포인트 `http://plus.kipris.or.kr/openapi/rest/patUtiModInfoSearchSevice/freeSearchInfo`)를 사용하며, 사용자 입력이 한글이면 한글명, 아니면 `compound.name`을 키워드(`word`)로 검색한다(특허+실용신안 포함). KIPRIS는 환경 변수 `KIPRIS_SERVICE_KEY`가 설정된 경우에만 동작하고, 미설정 시 provider가 비활성화된다(오류 아님, `providers[]`/`patents[]`에서 제외, 키 없을 때 기본 source에도 미포함). 특허는 논문과 분리된 특허 탭에 SureChEMBL(글로벌)과 함께 표시된다.
 
 ### 이유
 
-사용자 요구. 사용자가 한국 특허를 함께 보길 요청했다. data.go.kr 특허실용신안 정보 검색 서비스는 개발단계 키가 자동 승인되는 무료 공개 API로, 한글 키워드로 한국 특허/실용신안을 조회할 수 있다.
+사용자 요구. 사용자가 한국 특허를 함께 보길 요청했다. KIPRIS Plus REST API는 한글 키워드로 한국 특허/실용신안을 조회할 수 있는 공개 API다. 인증은 KIPRIS Plus가 발급하는 "REST AccessKey"로 하며, plus.kipris.or.kr 가입 후 'API KEY 관리'에서 발급받는다(data.go.kr 활용신청이 아니다). 발급받은 AccessKey는 환경 변수 `KIPRIS_SERVICE_KEY`에 넣는다(변수 이름은 그대로 유지).
 
 ### 한계
 
 - 키워드(화합물 이름) 기반 검색이며 화학 구조 검색이 아니다.
-- 서비스 키가 필요하고(개발단계 무료, 약 월 1,000회 호출), 키 발급 전에는 비활성 상태로만 둔다.
-- 응답이 XML(data.go.kr 표준 envelope)이라 방어적으로 파싱한다. `header.successYN != Y` 또는 `resultCode != 00`이면 error로 분류하고 `resultMsg`를 로깅한다(클라이언트에는 sanitize).
+- KIPRIS Plus AccessKey가 필요하고, 키 발급 전에는 비활성 상태로만 둔다.
+- 응답이 KIPRIS XML envelope라 방어적으로 파싱한다. 성공은 `resultCode == "00"`로 판정한다(KIPRIS Plus에는 `successYN` 필드가 없다). `resultCode != "00"`이면 error로 분류하고 `resultMsg`를 로깅한다(클라이언트에는 sanitize).
 
 ### 영향
 
-- 특허 source에 `kipris`가 추가된다. `PatentItem` 매핑: title=inventionTitle, assignee=applicantName, publication_number=publicationNumber 또는 applicationNumber, date=applicationDate(8자리면 YYYY-MM-DD), source="kipris", url=KR 번호로 구성한 Google Patents 또는 KIPRIS 검색 링크(best effort). `totalCount`를 kipris의 `patents_total_hits` 기여분으로 잡는다.
-- 환경 변수 `KIPRIS_SERVICE_KEY`가 추가된다(선택). 키가 없으면 KIPRIS는 기본 source에 포함되지 않고 결과/진단에서 빠진다.
+- 특허 source에 `kipris`가 추가된다. 요청 파라미터는 `word`, `patent=true`, `utility=true`, `pageNo=1`, `numOfRows`, `accessKey`다. 응답의 행은 body/items 아래 `<PatentUtilityInfo>` 요소이며, 전체 건수는 `<count>` 요소 안의 `<TotalSearchCount>`다. `PatentItem` 매핑: title=InventionName, assignee=Applicant, publication_number=PublicNumber 또는 OpeningNumber 또는 RegistrationNumber 또는 ApplicationNumber, date=ApplicationDate(8자리 YYYYMMDD면 YYYY-MM-DD로 변환), source="kipris", url=번호 숫자로 구성한 Google Patents KR 링크(번호가 없으면 KIPRIS 검색 URL로 폴백). KIPRIS의 `TotalSearchCount`를 kipris의 `patents_total_hits` 기여분으로 잡고, SureChEMBL의 값과 합산한다.
+- 환경 변수 `KIPRIS_SERVICE_KEY`가 추가된다(선택, KIPRIS Plus AccessKey). 키가 없으면 KIPRIS는 기본 source에 포함되지 않고 결과/진단에서 빠진다.
 - 특허 탭에 SureChEMBL과 KIPRIS 특허가 동시에 표시된다.
+- 병합 후 특허 목록은 더 이상 `limit`로 전역 캡을 걸지 않는다. 각 특허 source가 최대 `limit`건씩 기여하므로 SureChEMBL이 KIPRIS를 밀어내지 않는다(라이브 검증: 아스피린 → surechembl 20 + kipris 30 = 특허 50건, total_hits 707,590).
 - 상태 분류는 ok/empty/rate_limited/timeout/error로 둔다.
