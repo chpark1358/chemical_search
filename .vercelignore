@@ -1,0 +1,15 @@
+# Vercel only builds the Next.js frontend. Exclude the Python backend, docs,
+# tests, and other non-Next assets so CLI uploads stay small and fast.
+scripts
+docs
+tests
+output
+test-results
+.venv-chemical
+**/__pycache__
+**/*.pyc
+Dockerfile
+.dockerignore
+render.yaml
+DEPLOYMENT.md
+AGENTS.md
