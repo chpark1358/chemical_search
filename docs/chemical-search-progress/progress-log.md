@@ -1,5 +1,43 @@
 # 개발 진행 로그
 
+## 2026-06-12: Supabase 인증 게이트 + Google Patents provider + 재검토 반영
+
+상태: 진행 중
+
+### 목적
+
+배포된 현실에 맞춰 (A) Supabase 인증으로 앱을 보호하고, (B) 특허에 관련도 랭킹을 주는 Google Patents provider를 추가하며, (C) 런타임 프록시/HF Space 자동배포 등 재검토에서 드러난 사항을 문서에 반영한다.
+
+### 진행 내용
+
+- Supabase 인증 게이트 결정 기록 (D-017): 미들웨어 전역 게이트(`src/middleware.ts`, 비로그인 → `/login`, `/chemical-api/*` → 401 JSON), 사용자별 저장/기록 RLS(`supabase/schema.sql`: `saved_items`, `search_history`, `auth.uid() = user_id`), 백엔드는 private HF Space + 프록시 Bearer 토큰(`CHEMICAL_API_TOKEN`)으로 보호
+- Google Patents provider 추가 결정 기록 (D-018): 비공식 XHR(`patents.google.com/xhr/query`)로 라이브 관련도 랭킹 특허 검색, 기본 특허 source `(google_patents, surechembl)`, SureChEMBL은 관련도 없는 보조 소스, ToS 회색지대·DC IP 차단 리스크 명시, D-009 부분 갱신
+- O-010(FastAPI 무인증 노출)을 '해결(2계층 인증)'로 갱신. 잔여 리스크로 서버 측 rate limit 미강제와 Google Patents 비공식 XHR(O-014 신규)을 명시
+- 백엔드 자동배포 토폴로지 반영: `scripts/**` push → GitHub Action `deploy-backend.yml`(GH 시크릿 `HF_WRITE_TOKEN`)이 private HF Space로 동기화 → HF Docker 재빌드. keepalive `keepalive.yml`(GH 시크릿 `HF_TOKEN`)이 ~30분마다 `/health` 인증 핑
+- 런타임 프록시(`src/app/chemical-api/[...path]/route.ts`)가 `next.config` rewrite를 대체함을 문서에 반영(요청 시점에 `CHEMICAL_API_URL` 읽음, `CHEMICAL_API_TOKEN`을 `Authorization: Bearer`로 주입)
+- `DEPLOYMENT.md`를 실제 토폴로지(Vercel 프론트 + private HF Space 백엔드 + GH Action 자동배포)로 재작성, 환경 변수 표·Supabase 설정 단계·2계층 인증 섹션 추가
+- `.env.example`에 프론트(Vercel) 변수 `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`(공개 키)/`CHEMICAL_API_TOKEN` 추가, 프론트/백엔드 변수 구분 표기
+- `README.md`에 Google Patents를 특허 소스·외부 네트워크(`patents.google.com`)에 추가, 런타임 프록시 설명 정정, Supabase 인증 게이트·로컬 `NEXT_PUBLIC_SUPABASE_*` 필요 안내(+ `supabase/schema.sql`/DEPLOYMENT.md 링크)
+
+### 변경 파일
+
+- `DEPLOYMENT.md`
+- `README.md`
+- `.env.example`
+- `docs/chemical-search-progress/decision-log.md`
+- `docs/chemical-search-progress/open-issues.md`
+- `docs/chemical-search-progress/progress-log.md`
+
+### 검증
+
+- 문서 정비 작업으로 코드 검증 없음. 실제 코드/설정(`src/middleware.ts`, `src/app/chemical-api/[...path]/route.ts`, `next.config.ts`, `supabase/schema.sql`, `.github/workflows/deploy-backend.yml`·`keepalive.yml`, `scripts/chemical_search/{pipeline,providers}.py`)을 읽어 배포 현실과 문서를 대조했다. Supabase 인증/Google Patents provider 구현의 lint/테스트 결과는 해당 코드 작업 종료 시 기록한다.
+
+### 다음 작업
+
+1. 프록시/백엔드 사용자·IP 단위 rate limit 강제 검토(O-010 잔여)
+2. 운영 환경(HF Space IP)에서 Google Patents 차단 빈도 모니터링(O-014)
+3. 인메모리 검색 상태 저장소 교체(O-009)
+
 ## 2026-06-11: Wikidata 한글 물질명 입력 + KIPRIS 한국 특허(키 게이트) 추가
 
 상태: 진행 중

@@ -8,6 +8,8 @@
  * 첫 구독 시 1회 fetch하고, 변경은 낙관적으로 캐시에 반영한 뒤 Supabase에 비동기 적용한다.
  */
 
+import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
+
 import { createClient } from "./supabase/client";
 
 const MAX_ENTRIES = 20;
@@ -55,6 +57,19 @@ function rowToEntry(row: HistoryRow): SearchHistoryEntry {
   };
 }
 
+/** Supabase 오류가 인증(401)인지 판별한다. 401이면 단순 롤백 대신 재로그인 흐름으로 넘긴다. */
+function isAuthError(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  const code = error.code ?? "";
+  const message = (error.message ?? "").toLowerCase();
+  return (
+    code === "401" ||
+    code === "PGRST301" ||
+    message.includes("jwt") ||
+    message.includes("unauthorized")
+  );
+}
+
 // ── 모듈 레벨 스토어 ─────────────────────────────────────────────────────────
 
 const EMPTY: SearchHistoryEntry[] = [];
@@ -99,19 +114,48 @@ async function load(): Promise<void> {
 }
 
 // 세션 하이드레이트 전 첫 load()가 익명으로 0건을 받는 레이스를 막기 위해 인증
-// 상태가 준비/변경되면 재조회한다. 로그아웃 시 캐시를 비운다.
+// 상태가 준비/변경되면 재조회한다. 로그아웃 시 스토어를 완전히 리셋한다.
 let authWired = false;
+let authSubscription: { unsubscribe: () => void } | null = null;
 function ensureAuthWired(): void {
   if (authWired) return;
   authWired = true;
-  createClient().auth.onAuthStateChange((event, session) => {
-    if (event === "SIGNED_OUT") {
-      loaded = true;
-      setSnapshot([]);
-    } else if (session) {
-      void load();
+  const { data } = createClient().auth.onAuthStateChange(
+    (event: AuthChangeEvent, session: Session | null) => {
+      if (event === "SIGNED_OUT") {
+        // 스토어를 완전히 리셋한다(다른 사용자가 로그인하면 깨끗하게 재조회되도록).
+        loaded = false;
+        loading = false;
+        setSnapshot([]);
+      } else if (session) {
+        void load();
+      }
     }
-  });
+  );
+  authSubscription = data.subscription;
+}
+
+/** 인증 리스너를 해제한다(주로 테스트/정리용). */
+export function teardownHistoryAuth(): void {
+  authSubscription?.unsubscribe();
+  authSubscription = null;
+  authWired = false;
+}
+
+/**
+ * 변이 실패를 처리한다. 401(세션 만료)이면 재로그인 흐름에 맡기고 낙관적 상태를
+ * 그대로 둔다. 그 외 오류는 이전 스냅샷으로 명시적 롤백한다.
+ */
+function handleMutationFailure(
+  prev: SearchHistoryEntry[],
+  error: { code?: string; message?: string } | null
+): void {
+  if (isAuthError(error)) {
+    console.warn("[searchHistory] 세션이 만료되었습니다. 다시 로그인해 주세요.");
+    return;
+  }
+  console.warn("[searchHistory] 기록 변경에 실패해 이전 상태로 되돌립니다.", error);
+  setSnapshot(prev);
 }
 
 /** 변경 구독. 첫 구독 시 1회 fetch하고 인증 변화에 재조회를 연결한다. */
@@ -149,6 +193,7 @@ export function addHistory(entry: Omit<SearchHistoryEntry, "ts">): void {
   const query = entry.query.trim();
   if (!query) return;
   const key = normalizeQuery(query);
+  const prev = snapshot;
   const next: SearchHistoryEntry = { ...entry, query, ts: Date.now() };
   const deduped = snapshot.filter((item) => normalizeQuery(item.query) !== key);
   setSnapshot([next, ...deduped]);
@@ -159,7 +204,10 @@ export function addHistory(entry: Omit<SearchHistoryEntry, "ts">): void {
       const {
         data: { user }
       } = await supabase.auth.getUser();
-      if (!user) return;
+      if (!user) {
+        handleMutationFailure(prev, { code: "401" });
+        return;
+      }
       // 같은 검색어의 이전 기록을 지운다(중복 제거, 최신만 유지).
       await supabase
         .from("search_history")
@@ -175,9 +223,9 @@ export function addHistory(entry: Omit<SearchHistoryEntry, "ts">): void {
         paper_count: entry.paperCount,
         patent_count: entry.patentCount
       });
-      if (error) void load();
-    } catch {
-      void load();
+      if (error) handleMutationFailure(prev, error);
+    } catch (error) {
+      handleMutationFailure(prev, error as { code?: string; message?: string });
     }
   })();
 }
@@ -187,18 +235,28 @@ export function removeHistory(query: string): void {
   const key = normalizeQuery(query);
   const match = snapshot.find((item) => normalizeQuery(item.query) === key);
   if (!match) return;
+  const prev = snapshot;
   setSnapshot(snapshot.filter((item) => normalizeQuery(item.query) !== key));
 
   void (async () => {
     try {
       const supabase = createClient();
+      // 방어적 심층 방어: RLS에 더해 user_id로도 스코프한다.
+      const {
+        data: { user }
+      } = await supabase.auth.getUser();
+      if (!user) {
+        handleMutationFailure(prev, { code: "401" });
+        return;
+      }
       const { error } = await supabase
         .from("search_history")
         .delete()
+        .eq("user_id", user.id)
         .eq("query", match.query);
-      if (error) void load();
-    } catch {
-      void load();
+      if (error) handleMutationFailure(prev, error);
+    } catch (error) {
+      handleMutationFailure(prev, error as { code?: string; message?: string });
     }
   })();
 }
@@ -206,6 +264,7 @@ export function removeHistory(query: string): void {
 /** 모든 기록 삭제. */
 export function clearHistory(): void {
   if (!snapshot.length) return;
+  const prev = snapshot;
   setSnapshot([]);
   void (async () => {
     try {
@@ -213,14 +272,17 @@ export function clearHistory(): void {
       const {
         data: { user }
       } = await supabase.auth.getUser();
-      if (!user) return;
+      if (!user) {
+        handleMutationFailure(prev, { code: "401" });
+        return;
+      }
       const { error } = await supabase
         .from("search_history")
         .delete()
         .eq("user_id", user.id);
-      if (error) void load();
-    } catch {
-      void load();
+      if (error) handleMutationFailure(prev, error);
+    } catch (error) {
+      handleMutationFailure(prev, error as { code?: string; message?: string });
     }
   })();
 }

@@ -26,6 +26,7 @@ from chemical_search.models import (
 from chemical_search.pipeline import KOREAN_RESOLVED_WARNING, SearchPipeline
 from chemical_search.wikidata import (
     WIKIDATA_USER_AGENT,
+    _build_query,
     contains_hangul,
     resolve_korean_name,
 )
@@ -103,6 +104,32 @@ class HangulDetectionTests(unittest.TestCase):
         self.assertFalse(contains_hangul("C9H8O4"))
         self.assertFalse(contains_hangul("BSYNRYMUTXBXSQ-UHFFFAOYSA-N"))
         self.assertFalse(contains_hangul(""))
+
+
+class BuildQueryTests(unittest.TestCase):
+    def test_query_prefers_exact_label_over_altlabel(self):
+        # A homonymous altLabel can resolve to the wrong compound, so an exact
+        # rdfs:label match must win: the query tags each branch with a
+        # ?labelMatch flag (1 for label, 0 for altLabel) and orders label first.
+        query = _build_query("아스피린")
+
+        self.assertIn("rdfs:label", query)
+        self.assertIn("skos:altLabel", query)
+        # Both branches bind the preference flag.
+        self.assertIn("BIND(1 AS ?labelMatch)", query)
+        self.assertIn("BIND(0 AS ?labelMatch)", query)
+        # Label matches sort ahead of altLabel matches before LIMIT 1.
+        self.assertIn("ORDER BY DESC(?labelMatch)", query)
+        self.assertIn("LIMIT 1", query)
+        # The label branch must precede the altLabel branch in the union.
+        self.assertLess(query.index("rdfs:label"), query.index("skos:altLabel"))
+        # ?labelMatch is selected so the ORDER BY can reference it.
+        self.assertIn("?labelMatch", query[: query.index("WHERE")])
+
+    def test_query_escapes_quotes_and_backslashes(self):
+        query = _build_query('a"b\\c')
+
+        self.assertIn('a\\"b\\\\c', query)
 
 
 class ResolveKoreanNameTests(unittest.TestCase):

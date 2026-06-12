@@ -1,6 +1,6 @@
 # 오픈 이슈
 
-최종 업데이트: 2026-06-11
+최종 업데이트: 2026-06-12
 
 ## 높은 우선순위
 
@@ -148,21 +148,24 @@ IUPAC 입력을 MVP-1에 넣을지 best-effort로 둘지 결정한다.
 
 ### O-010: FastAPI 무인증 노출
 
-상태: 미해결
+상태: 해결 (2계층 인증, D-017, 2026-06-12)
 
 현재 결과:
 
-- FastAPI는 인증 없이 모든 엔드포인트를 노출하며 `127.0.0.1:8000` 로컬 실행을 전제로 한다.
-- Next.js rewrite(`/chemical-api`)도 접근 제어 없이 그대로 프록시한다.
+- 2계층 인증을 도입해 해결했다(D-017).
+  1. **프론트 게이트:** `src/middleware.ts`가 모든 요청을 전역 게이트한다. 비로그인 사용자는 앱 경로에서 `/login`으로 리다이렉트되고, `/chemical-api/*` 프록시는 401 JSON을 돌려준다(백엔드 프록시도 로그인 세션을 요구).
+  2. **사용자별 데이터:** 저장됨/검색 기록은 Supabase에 사용자별로 저장되며 RLS로 격리된다(`supabase/schema.sql`).
+  3. **백엔드 보호:** 백엔드 FastAPI는 private Hugging Face Space로 배포되고, 런타임 프록시 라우트가 서버 측 `CHEMICAL_API_TOKEN`을 `Authorization: Bearer`로 주입해 private Space를 인증 호출한다(브라우저에는 토큰 비노출).
 
-확인 필요:
+잔여 리스크:
 
-- 배포 시 인증/접근 제어 방식 (API key, reverse proxy, 네트워크 격리 등)
-- rate limit과 입력 크기 제한의 서버 측 강제
+- **서버 측 rate limit이 강제되지 않는다.** 로그인한 사용자가 반복 검색하면 외부 API 한도(KIPRIS Plus, Semantic Scholar 등)를 소진할 수 있다. 운영 확장 시 프록시/백엔드에 사용자·IP 단위 레이트리밋을 추가한다.
+- Google Patents는 비공식 XHR provider라 ToS 회색지대·DC IP 차단 리스크가 있다(D-018, O-014).
+- 입력 크기 제한의 서버 측 강제는 미적용.
 
 영향:
 
-로컬 개발에는 문제가 없지만, 외부 배포 전에 반드시 보호 계층을 추가해야 한다.
+외부 배포(Vercel + private HF Space)에서 인증/접근 제어가 갖춰졌다. 레이트리밋 강제만 후속 과제로 남는다.
 
 ## 낮은 우선순위
 
@@ -209,6 +212,24 @@ OSRA/DECIMER 기반 구조 이미지 인식은 MVP 범위에서 제외한다.
 영향:
 
 키가 설정돼 한국 특허가 정상 조회된다. 키가 없으면 한국 특허 결과만 비어 있고 나머지 검색(논문, SureChEMBL 특허)은 정상 동작한다.
+
+### O-014: Google Patents 비공식 XHR 의존
+
+상태: 인지 (한계 수용, D-018)
+
+현재 결과:
+
+- Google Patents 특허 검색은 공개 API/계약 없는 비공식 XHR 엔드포인트(`patents.google.com/xhr/query`)에 의존한다(D-018). 브라우저 User-Agent를 요구하며(없으면 403), Google이 데이터센터 IP(예: 호스팅된 HF Space)를 차단할 수 있다. ToS 회색지대다.
+- 차단/파싱 실패는 graceful error 진단으로 처리되고 특허 탭은 SureChEMBL/KIPRIS로 계속 채워진다.
+
+확인 필요:
+
+- 운영 환경(HF Space IP)에서 Google Patents 차단 빈도 모니터링
+- 차단이 잦으면 SureChEMBL/KIPRIS 보조 의존도 조정 또는 공식 데이터셋(BigQuery) 검토
+
+영향:
+
+관련도 랭킹 특허 결과의 가용성이 Google의 비공식 엔드포인트 정책/IP 차단에 종속된다. 다만 특허 탭 자체는 다른 소스로 유지된다.
 
 ### O-013: Wikidata 한글명 커버리지 한계
 

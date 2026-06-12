@@ -28,12 +28,16 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
-  if (user || isPublicPath(pathname)) {
+  // /chemical-api/* 는 확장자와 무관하게 항상 게이트한다(정적 우회 방지).
+  // 인증된 사용자가 아니면 곧장 401 JSON으로 막는다.
+  const isBackendProxy = pathname.startsWith("/chemical-api");
+
+  if (user || (isPublicPath(pathname) && !isBackendProxy)) {
     return response;
   }
 
   // 백엔드 프록시는 fetch로 호출되므로 HTML 리다이렉트가 아닌 401 JSON을 돌려준다.
-  if (pathname.startsWith("/chemical-api")) {
+  if (isBackendProxy) {
     const unauthorized = NextResponse.json(
       { detail: "로그인이 필요합니다. 다시 로그인해 주세요." },
       { status: 401 }
@@ -65,9 +69,12 @@ export const config = {
     /*
      * 정적/내부 리소스를 제외한 모든 경로에서 동작한다:
      * - _next/static, _next/image (빌드/이미지 최적화 산출물)
-     * - favicon.ico, 그리고 흔한 정적 확장자(이미지/폰트 등)
-     * 그 외(앱 페이지 + /chemical-api 프록시)는 모두 게이트한다.
+     * - favicon.ico, 그리고 _next/ 아래의 흔한 정적 확장자(이미지/폰트 등)
+     *
+     * 정적 확장자 제외는 _next/ 경로로만 한정한다. 이렇게 하면 임의 경로(예:
+     * /chemical-api/...png)가 확장자만으로 게이트를 우회하지 못한다 — 앱 페이지와
+     * /chemical-api 프록시는 확장자와 무관하게 항상 미들웨어를 거친다.
      */
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff|woff2|ttf|otf)$).*)"
+    "/((?!_next/static|_next/image|favicon.ico|_next/.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff|woff2|ttf|otf)$).*)"
   ]
 };

@@ -1,12 +1,14 @@
-import { AlertTriangle, RotateCw } from "lucide-react";
+import { AlertTriangle, LogIn, RotateCw } from "lucide-react";
 
-type BannerKind = "partial" | "failed" | "pollFailed";
+type BannerKind = "partial" | "failed" | "pollFailed" | "unauthorized";
 
 interface StatusBannerProps {
   kind: BannerKind;
   message?: string | null;
   failedProviders?: string[];
   onRetry?: () => void;
+  /** 세션 만료(unauthorized) 시 재로그인으로 보낼 경로(예: /login?next=...). */
+  loginHref?: string;
 }
 
 function sanitizeMessage(message: string | null | undefined): string | null {
@@ -20,8 +22,37 @@ export default function StatusBanner({
   kind,
   message,
   failedProviders,
-  onRetry
+  onRetry,
+  loginHref = "/login"
 }: StatusBannerProps) {
+  if (kind === "unauthorized") {
+    return (
+      <div
+        className="panel-highlight rounded-xl border border-hairline bg-surface-1 px-4 py-4"
+        data-testid="status-banner"
+        role="alert"
+      >
+        <div className="flex items-start gap-2.5">
+          <AlertTriangle aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-danger" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-ink">세션이 만료되었습니다.</p>
+            <p className="mt-1 text-sm leading-5 text-ink-subtle">
+              세션이 만료되었습니다. 다시 로그인해 주세요.
+            </p>
+          </div>
+        </div>
+        <a
+          className="ml-[26px] mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-hairline bg-surface-2 px-3 text-sm text-ink transition-colors duration-150 hover:bg-surface-3"
+          data-testid="status-banner-login"
+          href={loginHref}
+        >
+          <LogIn aria-hidden="true" className="size-3.5" />
+          다시 로그인
+        </a>
+      </div>
+    );
+  }
+
   if (kind === "partial") {
     return (
       <div

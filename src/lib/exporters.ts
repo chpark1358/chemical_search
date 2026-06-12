@@ -9,6 +9,21 @@
 import type { Paper, Patent } from "./api";
 import { papersToBibTeX, papersToRIS } from "./citation";
 
+/** 출처 머신명 → 사람이 읽는 라벨. 내보내기(CSV/Markdown/xlsx)의 '출처' 열에 쓴다. */
+const SOURCE_LABELS: Record<string, string> = {
+  openalex: "OpenAlex",
+  crossref: "Crossref",
+  semantic_scholar: "Semantic Scholar",
+  google_patents: "Google Patents",
+  surechembl: "SureChEMBL",
+  kipris: "KIPRIS"
+};
+
+/** 알려진 출처는 사람이 읽는 라벨로, 모르는 값은 원본 문자열을 그대로 돌려준다. */
+function sourceLabel(source: string): string {
+  return SOURCE_LABELS[source] ?? source;
+}
+
 /**
  * CSV 셀 escape: 따옴표/콤마/개행이 있으면 큰따옴표로 감싸고 내부 따옴표를 두 번으로.
  * 또한 =,+,-,@ 로 시작하는 값은 작은따옴표를 붙여 스프레드시트 수식 주입(CSV injection)을 막는다.
@@ -47,7 +62,7 @@ export function papersToCsv(papers: Paper[]): string {
       p.citations,
       p.doi,
       p.url,
-      p.source
+      sourceLabel(p.source)
     ])
   );
 }
@@ -61,7 +76,7 @@ export function patentsToCsv(patents: Patent[]): string {
       p.title,
       p.assignee,
       p.date,
-      p.source,
+      sourceLabel(p.source),
       p.url
     ])
   );
@@ -75,7 +90,7 @@ export function papersToMarkdown(papers: Paper[]): string {
   const header = "| 제목 | 저자 | 저널 | 연도 | DOI | 인용수 | 출처 |";
   const divider = "| --- | --- | --- | --- | --- | --- | --- |";
   const rows = papers.map((p) =>
-    `| ${mdEscape(p.title)} | ${mdEscape(p.authors.join("; "))} | ${mdEscape(p.venue ?? "")} | ${p.year ?? ""} | ${p.doi ?? ""} | ${p.citations ?? ""} | ${p.source} |`
+    `| ${mdEscape(p.title)} | ${mdEscape(p.authors.join("; "))} | ${mdEscape(p.venue ?? "")} | ${p.year ?? ""} | ${p.doi ?? ""} | ${p.citations ?? ""} | ${sourceLabel(p.source)} |`
   );
   return [header, divider, ...rows].join("\n") + "\n";
 }
@@ -84,7 +99,7 @@ export function patentsToMarkdown(patents: Patent[]): string {
   const header = "| 공개번호 | 제목 | 출원인 | 공개일 | 출처 |";
   const divider = "| --- | --- | --- | --- | --- |";
   const rows = patents.map((p) =>
-    `| ${mdEscape(p.publication_number)} | ${mdEscape(p.title)} | ${mdEscape(p.assignee ?? "")} | ${p.date ?? ""} | ${p.source} |`
+    `| ${mdEscape(p.publication_number)} | ${mdEscape(p.title)} | ${mdEscape(p.assignee ?? "")} | ${p.date ?? ""} | ${sourceLabel(p.source)} |`
   );
   return [header, divider, ...rows].join("\n") + "\n";
 }
@@ -244,7 +259,7 @@ export async function exportXlsx({
         citations: p.citations ?? "",
         doi: p.doi ?? "",
         url: "",
-        source: p.source
+        source: sourceLabel(p.source)
       });
       if (p.doi) {
         const doiCell = row.getCell("doi");
@@ -281,7 +296,7 @@ export async function exportXlsx({
         title: p.title,
         assignee: p.assignee ?? "",
         date: p.date ?? "",
-        source: p.source,
+        source: sourceLabel(p.source),
         url: ""
       });
       if (p.url) {

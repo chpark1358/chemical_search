@@ -256,13 +256,18 @@ class MergeTests(unittest.TestCase):
             merge_papers([[paper("semantic_scholar")]], sort="alphabetical")
 
 
-def patent(publication_number: str, title: str = "Patent") -> PatentItem:
+def patent(
+    publication_number: str,
+    title: str = "Patent",
+    *,
+    source: str = "surechembl",
+) -> PatentItem:
     return PatentItem(
         id=publication_number,
         publication_number=publication_number,
         title=title,
         url=f"https://patents.google.com/patent/{publication_number}/en",
-        source="surechembl",
+        source=source,
     )
 
 
@@ -287,6 +292,43 @@ class DedupPatentsTests(unittest.TestCase):
         )
 
         self.assertEqual(len(unique), 2)
+
+    def test_hyphenated_variants_dedupe_across_sources_first_seen_kept(self):
+        # Google Patents keeps hyphens ("CN-102369480-A") while SureChEMBL
+        # strips them ("CN102369480A"); the normalized key must collapse them so
+        # the same patent is not listed twice across sources. First-seen wins,
+        # and the surviving record keeps its source's original display string.
+        unique = dedup_patents(
+            [
+                patent("CN-102369480-A", title="Google", source="google_patents"),
+                patent("CN102369480A", title="SureChEMBL", source="surechembl"),
+            ]
+        )
+
+        self.assertEqual(len(unique), 1)
+        self.assertEqual(unique[0].title, "Google")
+        # The display value is preserved as the first source formatted it.
+        self.assertEqual(unique[0].publication_number, "CN-102369480-A")
+
+    def test_case_and_spacing_differences_dedupe(self):
+        unique = dedup_patents(
+            [
+                patent("US 1234567 B2", title="First", source="google_patents"),
+                patent("us1234567b2", title="Duplicate", source="surechembl"),
+            ]
+        )
+
+        self.assertEqual([item.title for item in unique], ["First"])
+
+    def test_distinct_publication_numbers_are_all_kept(self):
+        unique = dedup_patents(
+            [
+                patent("CN-102369480-A", title="A", source="google_patents"),
+                patent("CN102369481A", title="B", source="surechembl"),
+            ]
+        )
+
+        self.assertEqual([item.title for item in unique], ["A", "B"])
 
     def test_empty_list_returns_empty(self):
         self.assertEqual(dedup_patents([]), [])

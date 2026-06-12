@@ -20,6 +20,7 @@ from chemical_search.http_client import ProviderHttpError
 from chemical_search.models import UNTITLED_PATENT, CompoundCandidate, HttpDiagnostics
 from chemical_search.pipeline import SearchPipeline, default_sources
 from chemical_search.providers import (
+    KIPRIS_CACHE_TTL,
     KIPRIS_SERVICE_KEY_ENV,
     KiprisProvider,
     is_kipris_enabled,
@@ -105,6 +106,7 @@ class FakeTextHttp:
     def __init__(self, payloads: list):
         self.payloads = list(payloads)
         self.urls: list[str] = []
+        self.get_text_ttls: list[int] = []
 
     def get_text(
         self,
@@ -115,10 +117,43 @@ class FakeTextHttp:
         retries: int = 0,
     ) -> tuple[str, HttpDiagnostics]:
         self.urls.append(url)
+        self.get_text_ttls.append(cache_ttl_seconds)
         item = self.payloads.pop(0)
         if isinstance(item, Exception):
             raise item
         return item, http_diag()
+
+
+class FakeCachingTextHttp(FakeTextHttp):
+    """Adds an in-memory success-only cache mirroring HttpClient's text cache.
+
+    ``get_text`` never auto-caches (the provider always passes
+    ``cache_ttl_seconds=0``); only explicit ``set_cached_text`` calls populate
+    the store, so this lets tests assert that KIPRIS caches successes but not
+    error/quota responses, and that a cache hit avoids a second fetch.
+    """
+
+    def __init__(self, payloads: list):
+        super().__init__(payloads)
+        self._store: dict[str, str] = {}
+        self.set_calls: list[tuple[str, int]] = []
+
+    def get_cached_text(
+        self, url: str, *, headers: dict[str, str] | None = None
+    ) -> str | None:
+        return self._store.get(url)
+
+    def set_cached_text(
+        self,
+        url: str,
+        text: str,
+        cache_ttl_seconds: int,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.set_calls.append((url, cache_ttl_seconds))
+        if cache_ttl_seconds > 0:
+            self._store[url] = text
 
 
 def with_key(value: str = "test-service-key"):
@@ -182,7 +217,10 @@ class KiprisParsingTests(unittest.TestCase):
         # URL built from publication number digits.
         self.assertEqual(first.url, "https://patents.google.com/patent/KR1020220011111")
 
-    def test_request_sends_expected_params(self):
+    def test_request_sends_fixed_num_of_rows_independent_of_limit(self):
+        # numOfRows must be the FIXED page size (not the caller's limit) so the
+        # cache key does not fragment across 20/30/50-row requests and burn the
+        # free-tier quota; the provider slices client-side instead.
         http = FakeTextHttp([KIPRIS_XML])
         provider = KiprisProvider(http)
 
@@ -192,12 +230,31 @@ class KiprisParsingTests(unittest.TestCase):
         url = http.urls[0]
         self.assertIn("freeSearchInfo", url)
         self.assertIn("accessKey=my-key", url)
-        self.assertIn("numOfRows=7", url)
+        self.assertIn(f"numOfRows={KiprisProvider.KIPRIS_NUM_OF_ROWS}", url)
+        # The requested limit must NOT appear in the URL.
+        self.assertNotIn("numOfRows=7", url)
         self.assertIn("pageNo=1", url)
         self.assertIn("patent=true", url)
         self.assertIn("utility=true", url)
         # Korean word is URL-encoded.
         self.assertIn("word=%", url)
+
+    def test_results_sliced_to_requested_limit_client_side(self):
+        # The fixture carries 2 rows; a limit of 1 must slice client-side while
+        # the URL still asks for the fixed page size.
+        http = FakeTextHttp([KIPRIS_XML])
+        provider = KiprisProvider(http)
+
+        with with_key("my-key"):
+            patents, total_hits, _ = provider.search_patents(word="아스피린", limit=1)
+
+        self.assertEqual(len(patents), 1)
+        self.assertEqual(patents[0].title, "아스피린 제조 방법")
+        # total_hits still reflects the upstream count, not the sliced length.
+        self.assertEqual(total_hits, 1234)
+        self.assertIn(
+            f"numOfRows={KiprisProvider.KIPRIS_NUM_OF_ROWS}", http.urls[0]
+        )
 
     def test_missing_fields_fall_back(self):
         http = FakeTextHttp([KIPRIS_XML])
@@ -210,11 +267,16 @@ class KiprisParsingTests(unittest.TestCase):
         self.assertEqual(second.title, "이부프로펜 조성물")
         # Empty applicantName element -> None.
         self.assertIsNone(second.assignee)
-        # No publicationNumber -> falls back to applicationNumber.
+        # No publication number -> publication_number falls back to the
+        # application number for display.
         self.assertEqual(second.publication_number, "2020100054321")
         # Empty applicationDate -> None.
         self.assertIsNone(second.date)
-        self.assertEqual(second.url, "https://patents.google.com/patent/KR2020100054321")
+        # ...but a Korean APPLICATION number does not map to a Google Patents
+        # publication URL, so the link falls back to a KIPRIS search (no dead
+        # patents.google.com/patent/KR... link).
+        self.assertNotIn("patents.google.com", second.url or "")
+        self.assertIn("kipris.or.kr/khome/search/searchResult.do", second.url or "")
 
     def test_empty_items_is_empty_status(self):
         http = FakeTextHttp([KIPRIS_EMPTY_XML])
@@ -270,6 +332,55 @@ class KiprisParsingTests(unittest.TestCase):
         self.assertEqual(patents[0].title, "제목만 있는 특허")
         self.assertIn("kipris.or.kr/khome/search/searchResult.do", patents[0].url)
 
+    def test_registration_number_builds_google_patents_url(self):
+        # A RegistrationNumber (a true publication/registration number) DOES map
+        # to a Google Patents KR page, unlike an application number.
+        reg_xml = """<?xml version="1.0"?>
+        <response>
+          <header><resultCode>00</resultCode></header>
+          <body><items>
+            <PatentUtilityInfo>
+              <InventionName>등록 특허</InventionName>
+              <ApplicationNumber>1020200012345</ApplicationNumber>
+              <RegistrationNumber>1012345670000</RegistrationNumber>
+            </PatentUtilityInfo>
+          </items></body>
+          <count><TotalSearchCount>1</TotalSearchCount></count>
+        </response>"""
+        http = FakeTextHttp([reg_xml])
+        provider = KiprisProvider(http)
+
+        with with_key("my-key"):
+            patents, _, _ = provider.search_patents(word="aspirin", limit=10)
+
+        self.assertEqual(patents[0].publication_number, "1012345670000")
+        self.assertEqual(patents[0].url, "https://patents.google.com/patent/KR1012345670000")
+
+    def test_application_number_only_does_not_build_google_url(self):
+        # Application-number-only hit: publication_number falls back to the
+        # application number for display, but the URL must be the KIPRIS search
+        # fallback (Korean application numbers are not Google publication URLs).
+        app_only_xml = """<?xml version="1.0"?>
+        <response>
+          <header><resultCode>00</resultCode></header>
+          <body><items>
+            <PatentUtilityInfo>
+              <InventionName>출원만 된 특허</InventionName>
+              <ApplicationNumber>1020200012345</ApplicationNumber>
+            </PatentUtilityInfo>
+          </items></body>
+          <count><TotalSearchCount>1</TotalSearchCount></count>
+        </response>"""
+        http = FakeTextHttp([app_only_xml])
+        provider = KiprisProvider(http)
+
+        with with_key("my-key"):
+            patents, _, _ = provider.search_patents(word="aspirin", limit=10)
+
+        self.assertEqual(patents[0].publication_number, "1020200012345")
+        self.assertNotIn("patents.google.com", patents[0].url or "")
+        self.assertIn("kipris.or.kr/khome/search/searchResult.do", patents[0].url or "")
+
     def test_no_title_uses_placeholder(self):
         no_title_xml = """<?xml version="1.0"?>
         <response>
@@ -308,6 +419,101 @@ class KiprisParsingTests(unittest.TestCase):
             _, _, diagnostics = provider.search_patents(word="aspirin", limit=10)
 
         self.assertEqual(diagnostics.status, "timeout")
+
+
+class KiprisCachingTests(unittest.TestCase):
+    def test_get_text_called_with_zero_ttl_no_raw_caching(self):
+        # KIPRIS must fetch with cache_ttl_seconds=0 so the HTTP layer does not
+        # blindly cache a 2xx body (which could be a quota/error envelope).
+        http = FakeTextHttp([KIPRIS_XML])
+        provider = KiprisProvider(http)
+
+        with with_key("my-key"):
+            provider.search_patents(word="아스피린", limit=10)
+
+        self.assertEqual(http.get_text_ttls, [0])
+
+    def test_success_response_is_cached(self):
+        http = FakeCachingTextHttp([KIPRIS_XML])
+        provider = KiprisProvider(http)
+
+        with with_key("my-key"):
+            patents, _, _ = provider.search_patents(word="아스피린", limit=10)
+
+        self.assertEqual(len(patents), 2)
+        # Exactly one cache write, with the 24h KIPRIS TTL (>0).
+        self.assertEqual(len(http.set_calls), 1)
+        _, ttl = http.set_calls[0]
+        self.assertEqual(ttl, KIPRIS_CACHE_TTL)
+        self.assertGreater(ttl, 0)
+
+    def test_empty_success_response_is_cached(self):
+        # resultCode "00" with zero rows is still a success and may be cached.
+        http = FakeCachingTextHttp([KIPRIS_EMPTY_XML])
+        provider = KiprisProvider(http)
+
+        with with_key("my-key"):
+            patents, total_hits, diagnostics = provider.search_patents(word="x", limit=10)
+
+        self.assertEqual(patents, [])
+        self.assertEqual(total_hits, 0)
+        self.assertEqual(diagnostics.status, "empty")
+        self.assertEqual(len(http.set_calls), 1)
+
+    def test_error_result_code_response_is_not_cached(self):
+        # resultCode != "00" (quota/parameter errors) signalled as HTTP 200 must
+        # NOT be cached, or a quota error would stick for 24h after a reset.
+        http = FakeCachingTextHttp([KIPRIS_ERROR_XML])
+        provider = KiprisProvider(http)
+
+        with with_key("my-key"):
+            _, _, diagnostics = provider.search_patents(word="aspirin", limit=10)
+
+        self.assertEqual(diagnostics.status, "error")
+        self.assertEqual(http.set_calls, [])
+
+    def test_malformed_xml_response_is_not_cached(self):
+        http = FakeCachingTextHttp(["<not-xml<<<"])
+        provider = KiprisProvider(http)
+
+        with with_key("my-key"):
+            _, _, diagnostics = provider.search_patents(word="aspirin", limit=10)
+
+        self.assertEqual(diagnostics.status, "error")
+        self.assertEqual(http.set_calls, [])
+
+    def test_second_call_served_from_cache_without_refetch(self):
+        # The first call caches the success body; the second must be served from
+        # the cache (only ONE get_text fetch total) and report cached=True.
+        http = FakeCachingTextHttp([KIPRIS_XML])  # one payload -> IndexError on a 2nd fetch
+        provider = KiprisProvider(http)
+
+        with with_key("my-key"):
+            first, _, first_diag = provider.search_patents(word="아스피린", limit=10)
+            second, _, second_diag = provider.search_patents(word="아스피린", limit=10)
+
+        self.assertEqual(len(first), 2)
+        self.assertEqual(len(second), 2)
+        self.assertEqual(len(http.urls), 1)  # only the first call hit the network
+        self.assertFalse(first_diag.cached)
+        self.assertTrue(second_diag.cached)
+        # The cache hit must not re-write the cache.
+        self.assertEqual(len(http.set_calls), 1)
+
+    def test_error_then_success_recovers_after_quota_reset(self):
+        # An error response is not cached, so a follow-up retry (e.g. after the
+        # quota resets) fetches fresh and succeeds instead of serving the error.
+        http = FakeCachingTextHttp([KIPRIS_ERROR_XML, KIPRIS_XML])
+        provider = KiprisProvider(http)
+
+        with with_key("my-key"):
+            _, _, first_diag = provider.search_patents(word="아스피린", limit=10)
+            patents, _, second_diag = provider.search_patents(word="아스피린", limit=10)
+
+        self.assertEqual(first_diag.status, "error")
+        self.assertEqual(second_diag.status, "ok")
+        self.assertEqual(len(patents), 2)
+        self.assertEqual(len(http.urls), 2)  # both calls fetched (no error caching)
 
 
 # --- Pipeline-level KIPRIS integration (active vs inactive) ---

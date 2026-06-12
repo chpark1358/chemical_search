@@ -308,3 +308,53 @@ SureChEMBL만 추가한다. EPO OPS와 ChEMBL 구조 검색(exact/similarity/sub
 - 특허 탭에 SureChEMBL과 KIPRIS 특허가 동시에 표시된다.
 - 병합 후 특허 목록은 더 이상 `limit`로 전역 캡을 걸지 않는다. 각 특허 source가 최대 `limit`건씩 기여하므로 SureChEMBL이 KIPRIS를 밀어내지 않는다(라이브 검증: 아스피린 → surechembl 20 + kipris 30 = 특허 50건, total_hits 707,590).
 - 상태 분류는 ok/empty/rate_limited/timeout/error로 둔다.
+
+## D-017: Supabase 인증 게이트(미들웨어 전역 게이트 + RLS per-user 데이터 + 프록시 Bearer 토큰)
+
+날짜: 2026-06-12
+상태: 확정
+
+### 결정
+
+앱 전체를 Supabase 이메일/비밀번호 인증 뒤에 두고, 다음 2계층으로 보호한다.
+
+1. **프론트 게이트(미들웨어 전역 게이트).** `src/middleware.ts`가 정적/내부 리소스를 제외한 모든 요청을 게이트한다. 로그인하지 않은 사용자는 앱 경로에서 `/login`으로 리다이렉트(원래 경로는 `?next=`로 보존)되고, `/chemical-api/*` 프록시는 HTML 리다이렉트 대신 **401 JSON**을 돌려준다(클라이언트 fetch가 깔끔히 처리). 공개 경로는 `/login`과 `/auth/*`뿐이다. 세션 갱신 쿠키는 리다이렉트/401 응답에도 보존한다.
+2. **사용자별 데이터(RLS).** 저장됨 라이브러리와 검색 기록을 Supabase에 사용자별로 저장한다(`supabase/schema.sql`: `saved_items`, `search_history`). 두 테이블 모두 RLS를 켜고 `auth.uid() = user_id` 정책으로 각 사용자가 자기 행만 select/insert/update/delete 하도록 격리한다.
+3. **백엔드 보호(프록시 Bearer 토큰 → private HF Space).** 백엔드 FastAPI는 **private Hugging Face Space**로 배포해 외부 직접 호출에 HF 토큰을 요구한다. 런타임 프록시 라우트(`src/app/chemical-api/[...path]/route.ts`)는 브라우저가 못 보는 서버 측 env `CHEMICAL_API_TOKEN`을 `Authorization: Bearer`로 주입해 private Space를 인증 호출한다.
+
+### 이유
+
+이전에는 백엔드가 무인증으로 노출되고(O-010) 프론트에도 접근 제어가 없어, 공개 URL이면 누구나 호출해 외부 API 한도를 소진할 수 있었다. Supabase는 인증·세션(SSR 쿠키)·per-user 저장(RLS)을 한 번에 제공하고, HF Space의 private 가시성과 프록시 Bearer 토큰을 결합하면 백엔드를 별도 인증 미들웨어 구현 없이 보호할 수 있다.
+
+### 영향
+
+- 환경 변수 추가: 프론트(Vercel)에 `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`(공개 키, 접근 제어는 RLS), `CHEMICAL_API_TOKEN`(private Space Bearer). anon 키는 `NEXT_PUBLIC` 접두사로 브라우저에 노출되며 이는 설계상 의도된 동작이다.
+- `src/middleware.ts`, `src/lib/supabase/{client,server,middleware}.ts`, `/login` 페이지, `supabase/schema.sql`이 추가된다.
+- 로컬 개발도 인증 게이트 통과를 위해 `NEXT_PUBLIC_SUPABASE_*`가 필요하고, Supabase에 `schema.sql`을 한 번 실행해야 한다. Auth Site URL을 배포 도메인으로, Confirm email은 off로 설정한다.
+- O-010(FastAPI 무인증 노출)을 이 2계층 인증으로 해결한다. 다만 서버 측 rate limit은 여전히 강제되지 않는다(잔여 리스크).
+
+## D-018: Google Patents를 비공식 XHR 라이브 관련도 provider로 추가한다(D-009 부분 갱신)
+
+날짜: 2026-06-12
+상태: 확정
+
+### 결정
+
+특허 source에 `google_patents`를 추가한다. `patents.google.com`의 비공식 XHR 엔드포인트(`https://patents.google.com/xhr/query`)로 정규화된 화합물 이름을 검색해 **라이브 관련도 랭킹**(Google relevance order) 특허 결과를 받아 특허 탭에 병합한다. 외부 검색 링크(D-009)나 SureChEMBL docId 순서 recall과 달리, Google Patents는 관련도순 결과를 직접 제공한다. `sources` 미지정 시 기본 특허 source는 `google_patents` + `surechembl`이며(둘 다 키 불필요), KIPRIS는 키 게이트로 둔다.
+
+### 이유
+
+SureChEMBL은 화합물→특허 매핑은 정확하지만 **관련도 랭킹이 없어** 상위 결과가 사용자 의도와 어긋날 수 있다. Google Patents의 프런트엔드 XHR는 사람이 보는 것과 같은 관련도순 결과를 주므로, 보조(SureChEMBL/KIPRIS) 위에 관련도 우선 결과를 얹을 수 있다.
+
+### 동작/한계
+
+- 외부 `url` 파라미터가 실제 질의 문자열(`q=<name>&num=<limit>`)을 URL-encode해 감싸며, patents.google.com 프런트엔드가 자기 백엔드를 부르는 방식을 그대로 흉내 낸다.
+- 공개 API/계약이 없고 키도 없다. 엔드포인트는 브라우저 User-Agent를 요구하며(없으면 403), Google이 **데이터센터 IP**(예: 호스팅된 HF Space)를 차단할 수 있다.
+- 403/예상 밖 응답(HTML 차단 페이지)·파싱 실패는 특허 탭을 망가뜨리지 않고 graceful **error** 진단으로 노출되며, SureChEMBL/KIPRIS가 특허 탭을 계속 채운다. 상태 분류는 ok/empty/rate_limited/error.
+- **ToS 회색지대**다. 비공식 XHR 의존·DC IP 차단 리스크를 명시적으로 감수한다.
+
+### 영향
+
+- 특허 source에 `google_patents`가 추가되고(`PatentItem` source="google_patents"), 기본 특허 source가 `(google_patents, surechembl)`이 된다. `total_num_results`를 google_patents의 `patents_total_hits` 기여분으로 잡는다.
+- D-009(Google Patents 외부 검색 링크아웃)를 부분 갱신한다. 더 이상 통합 검색 링크만 제공하지 않고, 라이브 관련도 결과를 provider로 병합한다. SureChEMBL은 관련도 없는 보조 소스로 유지된다(D-014). EPO OPS/ChEMBL 구조검색 제외는 유지한다.
+- README의 외부 네트워크 목록에 `patents.google.com`을 추가한다.

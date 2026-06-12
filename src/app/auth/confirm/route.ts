@@ -17,10 +17,25 @@ function safeNext(next: string | null): string {
   return "/";
 }
 
+/** verifyOtp에 넘길 수 있는 OTP 타입 허용 목록. 그 외 값은 거부한다. */
+const ALLOWED_OTP_TYPES: ReadonlySet<EmailOtpType> = new Set<EmailOtpType>([
+  "email",
+  "signup",
+  "recovery",
+  "email_change",
+  "magiclink"
+]);
+
+function parseOtpType(value: string | null): EmailOtpType | null {
+  return value && ALLOWED_OTP_TYPES.has(value as EmailOtpType)
+    ? (value as EmailOtpType)
+    : null;
+}
+
 export async function GET(request: NextRequest): Promise<Response> {
   const { searchParams } = request.nextUrl;
   const tokenHash = searchParams.get("token_hash");
-  const type = searchParams.get("type") as EmailOtpType | null;
+  const type = parseOtpType(searchParams.get("type"));
   const next = safeNext(searchParams.get("next"));
 
   if (tokenHash && type) {

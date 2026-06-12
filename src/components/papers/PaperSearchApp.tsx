@@ -41,7 +41,11 @@ import PatentToolbar, {
 } from "./PatentToolbar";
 import ProviderChips, { isProviderFailure, providerLabel } from "./ProviderChips";
 import RecentSearches from "./RecentSearches";
-import ResultTabs, { type ResultTab } from "./ResultTabs";
+import ResultTabs, {
+  resultPanelId,
+  resultTabId,
+  type ResultTab
+} from "./ResultTabs";
 import SavedNav from "./SavedNav";
 import SavedView from "./SavedView";
 import SearchBar from "./SearchBar";
@@ -55,6 +59,13 @@ import { useSelection } from "./useSelection";
 /** URL 쿼리 파라미터를 안전하게 해석한다(없거나 잘못되면 기본값). */
 function parseTab(value: string | null): ResultTab {
   return value === "patents" ? "patents" : "papers";
+}
+
+/** 현재 경로+쿼리를 ?next=로 담은 재로그인 URL(세션 만료 시 사용). */
+function buildLoginHref(): string {
+  if (typeof window === "undefined") return "/login";
+  const here = window.location.pathname + window.location.search;
+  return here && here !== "/" ? `/login?next=${encodeURIComponent(here)}` : "/login";
 }
 
 function parsePaperSort(value: string | null): SortKey {
@@ -139,6 +150,8 @@ function liveMessage(phase: SearchPhase, candidateCount: number, paperCount: num
       return "검색에 실패했습니다.";
     case "pollFailed":
       return "응답이 지연되고 있습니다.";
+    case "unauthorized":
+      return "세션이 만료되었습니다. 다시 로그인해 주세요.";
     default:
       return "";
   }
@@ -163,7 +176,9 @@ function PaperSearchAppInner() {
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>(() =>
     parseSource(searchParams.get("src"))
   );
-  const [keyword, setKeyword] = useState("");
+  // 키워드 필터는 탭별로 분리한다(논문/특허가 서로 다른 필터를 갖도록).
+  const [paperKeyword, setPaperKeyword] = useState("");
+  const [patentKeyword, setPatentKeyword] = useState("");
   const [fold, setFold] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [activeTab, setActiveTab] = useState<ResultTab>(() =>
@@ -276,13 +291,13 @@ function PaperSearchAppInner() {
         ? allPapers
         : allPapers.filter((paper) => paper.source === effectiveSourceFilter);
     const byKeyword = bySource.filter((paper) =>
-      matchesKeyword([paper.title, paper.authors.join(" "), paper.venue], keyword)
+      matchesKeyword([paper.title, paper.authors.join(" "), paper.venue], paperKeyword)
     );
     const folded = fold
       ? foldPapers(byKeyword)
       : byKeyword.map((paper) => ({ ...paper, sources: [paper.source] }));
     return sortPapers(folded, sort);
-  }, [allPapers, sort, effectiveSourceFilter, keyword, fold]);
+  }, [allPapers, sort, effectiveSourceFilter, paperKeyword, fold]);
 
   // 접기 적용 전(필터만 적용) 수집 건수 — "수집 M건" 표기에 쓴다.
   const collectedPaperCount = useMemo(() => {
@@ -291,9 +306,9 @@ function PaperSearchAppInner() {
         ? allPapers
         : allPapers.filter((paper) => paper.source === effectiveSourceFilter);
     return bySource.filter((paper) =>
-      matchesKeyword([paper.title, paper.authors.join(" "), paper.venue], keyword)
+      matchesKeyword([paper.title, paper.authors.join(" "), paper.venue], paperKeyword)
     ).length;
-  }, [allPapers, effectiveSourceFilter, keyword]);
+  }, [allPapers, effectiveSourceFilter, paperKeyword]);
 
   // 결과에 실제로 존재하는 특허 출처/국가(필터 칩 노출 결정).
   // Google Patents는 관련도 정렬 출처라 존재하면 칩을 맨 앞에 둔다.
@@ -327,11 +342,11 @@ function PaperSearchAppInner() {
     const byKeyword = byCountry.filter((patent) =>
       matchesKeyword(
         [patent.title, patent.publication_number, patent.assignee],
-        keyword
+        patentKeyword
       )
     );
     return sortPatents(byKeyword, patentSort);
-  }, [allPatents, patentSourceFilter, patentCountryFilter, keyword, patentSort]);
+  }, [allPatents, patentSourceFilter, patentCountryFilter, patentKeyword, patentSort]);
 
   // 선택된 항목(내보내기용). 안정 키 기준으로 현재 보이는/전체 항목에서 추린다.
   const selectedPapers = useMemo(
@@ -411,7 +426,8 @@ function PaperSearchAppInner() {
   function handleSubmit(value: string) {
     setSort("relevance");
     setSourceFilter("all");
-    setKeyword("");
+    setPaperKeyword("");
+    setPatentKeyword("");
     setFold(true);
     setSelectedIndex(-1);
     setActiveTab("papers");
@@ -489,23 +505,28 @@ function PaperSearchAppInner() {
     setPatentCountryFilter(next);
   }
 
-  // 키워드 필터가 바뀌면 키보드 선택을 초기화한다 (행 목록이 달라지므로).
-  function handleKeywordChange(next: string) {
+  // 키워드 필터가 바뀌면 키보드 선택을 초기화한다 (행 목록이 달라지므로). 탭별로 분리한다.
+  function handlePaperKeywordChange(next: string) {
     setSelectedIndex(-1);
-    setKeyword(next);
+    setPaperKeyword(next);
+  }
+
+  function handlePatentKeywordChange(next: string) {
+    setSelectedIndex(-1);
+    setPatentKeyword(next);
   }
 
   // 논문 필터를 모두 초기화한다(필터로 결과가 모두 숨었을 때 사용).
   function handleResetPaperFilters() {
     setSelectedIndex(-1);
-    setKeyword("");
+    setPaperKeyword("");
     setSourceFilter("all");
   }
 
   // 특허 필터를 모두 초기화한다.
   function handleResetPatentFilters() {
     setSelectedIndex(-1);
-    setKeyword("");
+    setPatentKeyword("");
     setPatentSourceFilter("all");
     setPatentCountryFilter("all");
   }
@@ -515,6 +536,10 @@ function PaperSearchAppInner() {
     record?.candidates.length ?? 0,
     record?.papers.length ?? 0
   );
+
+  // 세션 만료 시 재로그인 후 현재 위치로 돌아오도록 ?next=에 현재 경로+쿼리를 담는다.
+  // window.location은 비반응형이라 렌더 시점에 직접 읽는다(unauthorized 분기에서만 쓰임).
+  const loginHref = buildLoginHref();
 
   // 저장됨 모드: 검색 결과 영역을 라이브러리로 대체한다(활성 검색이 없어도 동작).
   if (savedMode) {
@@ -640,21 +665,27 @@ function PaperSearchAppInner() {
                   patentCount={allPatents.length}
                 />
                 {activeTab === "papers" ? (
-                  <>
+                  <div
+                    aria-labelledby={resultTabId("papers")}
+                    className="flex flex-col gap-4"
+                    id={resultPanelId("papers")}
+                    role="tabpanel"
+                    tabIndex={0}
+                  >
                     <Toolbar
                       allSelected={paperSelection.allSelected(visiblePaperKeys)}
                       availableSources={availablePaperSources}
                       count={visiblePapers.length}
                       fold={fold}
-                      keyword={keyword}
+                      keyword={paperKeyword}
                       onClearSelection={paperSelection.clear}
                       onFoldChange={handleFoldChange}
-                      onKeywordChange={handleKeywordChange}
+                      onKeywordChange={handlePaperKeywordChange}
                       onSortChange={handleSortChange}
                       onSourceFilterChange={handleSourceFilterChange}
                       onToggleAll={() => paperSelection.toggleAll(visiblePaperKeys)}
                       searchId={record.search_id}
-                      selectedCount={paperSelection.count}
+                      selectedCount={selectedPapers.length}
                       selectedPapers={selectedPapers}
                       sort={sort}
                       sourceFilter={effectiveSourceFilter}
@@ -675,24 +706,30 @@ function PaperSearchAppInner() {
                       papers={visiblePapers}
                       selectedIndex={selectedIndex}
                     />
-                  </>
+                  </div>
                 ) : (
-                  <>
+                  <div
+                    aria-labelledby={resultTabId("patents")}
+                    className="flex flex-col gap-4"
+                    id={resultPanelId("patents")}
+                    role="tabpanel"
+                    tabIndex={0}
+                  >
                     <PatentToolbar
                       allSelected={patentSelection.allSelected(visiblePatentKeys)}
                       availableCountries={availablePatentCountries}
                       availableSources={availablePatentSources}
                       count={visiblePatents.length}
                       countryFilter={patentCountryFilter}
-                      keyword={keyword}
+                      keyword={patentKeyword}
                       onClearSelection={patentSelection.clear}
                       onCountryFilterChange={handlePatentCountryFilterChange}
-                      onKeywordChange={handleKeywordChange}
+                      onKeywordChange={handlePatentKeywordChange}
                       onSortChange={handlePatentSortChange}
                       onSourceFilterChange={handlePatentSourceFilterChange}
                       onToggleAll={() => patentSelection.toggleAll(visiblePatentKeys)}
                       searchId={record.search_id}
-                      selectedCount={patentSelection.count}
+                      selectedCount={selectedPatents.length}
                       selectedPatents={selectedPatents}
                       sort={patentSort}
                       sourceFilter={patentSourceFilter}
@@ -701,6 +738,11 @@ function PaperSearchAppInner() {
                     />
                     <PatentList
                       filtered={allPatents.length > 0}
+                      filterActive={
+                        patentSourceFilter !== "all" ||
+                        patentCountryFilter !== "all" ||
+                        patentKeyword.trim().length > 0
+                      }
                       isChecked={(patent) =>
                         patentSelection.isSelected(patentKey(patent))
                       }
@@ -717,7 +759,7 @@ function PaperSearchAppInner() {
                       selectedIndex={selectedIndex}
                       totalHits={record.patents_total_hits}
                     />
-                  </>
+                  </div>
                 )}
                 {navItems.length ? (
                   <p className="font-mono text-[11px] text-ink-tertiary">
@@ -733,6 +775,10 @@ function PaperSearchAppInner() {
 
             {phase === "pollFailed" ? (
               <StatusBanner kind="pollFailed" onRetry={handleRetry} />
+            ) : null}
+
+            {phase === "unauthorized" ? (
+              <StatusBanner kind="unauthorized" loginHref={loginHref} />
             ) : null}
           </div>
         </>

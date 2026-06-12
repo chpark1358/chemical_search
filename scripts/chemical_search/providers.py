@@ -727,6 +727,13 @@ class KiprisProvider:
         "patUtiModInfoSearchSevice/freeSearchInfo"
     )
 
+    # Fixed page size sent on every KIPRIS call. The requested ``limit`` varies
+    # (20/30/50), so baking it into ``numOfRows`` would fragment the cache and
+    # burn extra calls against the free tier (~1000/month). Instead we always
+    # ask for ``KIPRIS_NUM_OF_ROWS`` rows (limit-independent cache key) and slice
+    # to the caller's ``limit`` client-side.
+    KIPRIS_NUM_OF_ROWS = 50
+
     def __init__(self, http: HttpClient):
         self.http = http
 
@@ -741,6 +748,13 @@ class KiprisProvider:
         ``total_hits`` is the envelope ``TotalSearchCount``. A non-"00" result
         code is treated as an error, with the upstream message logged
         server-side but not surfaced to clients.
+
+        Caching is success-only: KIPRIS signals quota/errors as HTTP 200 with
+        ``resultCode != "00"``, so a blanket 2xx cache would pin a quota error in
+        place for ``KIPRIS_CACHE_TTL`` (24h) even after the quota resets. We
+        therefore fetch with ``cache_ttl_seconds=0`` (no automatic raw caching),
+        check the cache ourselves first, and only write the response back to the
+        shared cache once ``resultCode == "00"`` (a genuine success/empty body).
         """
         access_key = (os.getenv(KIPRIS_SERVICE_KEY_ENV) or "").strip()
         # Defensive: callers gate on is_kipris_enabled(), but guard anyway so a
@@ -750,23 +764,33 @@ class KiprisProvider:
             no_call = HttpDiagnostics(latency_ms=0, cached=False, retry_count=0)
             return [], None, ProviderDiagnostics.from_http(self.name, "empty", no_call)
 
+        # numOfRows is the FIXED page size (not ``limit``) so the cache key does
+        # not fragment across different requested limits; we slice client-side.
         url = (
             f"{self.base_url}"
             f"?word={quote(word, safe='')}"
             f"&accessKey={quote(access_key, safe='')}"
-            f"&numOfRows={limit}"
+            f"&numOfRows={self.KIPRIS_NUM_OF_ROWS}"
             "&pageNo=1"
             "&patent=true"
             "&utility=true"
         )
-        try:
-            text, http = self.http.get_text(
-                url,
-                cache_ttl_seconds=KIPRIS_CACHE_TTL,
-                retries=1,
-            )
-        except ProviderHttpError as exc:
-            return [], None, _error_diagnostics(self.name, exc)
+
+        cached_text = self._cache_get(url)
+        if cached_text is not None:
+            text = cached_text
+            http = HttpDiagnostics(latency_ms=0, cached=True, retry_count=0)
+        else:
+            try:
+                # cache_ttl_seconds=0: do NOT let the HTTP layer cache the raw
+                # 2xx body; an error envelope (resultCode != "00") would stick.
+                text, http = self.http.get_text(
+                    url,
+                    cache_ttl_seconds=0,
+                    retries=1,
+                )
+            except ProviderHttpError as exc:
+                return [], None, _error_diagnostics(self.name, exc)
 
         try:
             root = ElementTree.fromstring(text)
@@ -788,6 +812,8 @@ class KiprisProvider:
                 result_code,
                 result_msg,
             )
+            # Not cached: leaving error bodies uncached lets a retry succeed once
+            # the quota resets instead of serving the stale error for 24h.
             return [], None, ProviderDiagnostics.from_http(
                 self.name,
                 "error",
@@ -795,29 +821,63 @@ class KiprisProvider:
                 message="KIPRIS 검색에 실패했습니다.",
             )
 
+        # Success (resultCode "00", possibly empty): safe to cache the raw body
+        # so repeat queries within KIPRIS_CACHE_TTL skip the call. Only write on
+        # a fresh fetch (not when we already served from cache).
+        if cached_text is None:
+            self._cache_set(url, text)
+
         items = root.findall(".//PatentUtilityInfo")
-        patents = [self._patent(item) for item in items]
+        # numOfRows is fixed above, so slice to the caller's requested limit.
+        patents = [self._patent(item) for item in items[:limit]]
         total_hits = self._int(self._text(root.find(".//TotalSearchCount")))
         status = "ok" if patents else "empty"
         return patents, total_hits, ProviderDiagnostics.from_http(self.name, status, http)
+
+    def _cache_get(self, url: str) -> str | None:
+        """Read a previously cached success body, tolerating http clients (e.g.
+        unit-test fakes) that do not expose the cache helpers."""
+        getter = getattr(self.http, "get_cached_text", None)
+        if getter is None:
+            return None
+        try:
+            return getter(url)
+        except Exception:  # pragma: no cover - cache reads must never fail a call
+            logger.warning("KIPRIS cache read failed; continuing without cache.", exc_info=True)
+            return None
+
+    def _cache_set(self, url: str, text: str) -> None:
+        """Write a success body to the shared cache, tolerating http clients
+        that do not expose the cache helpers."""
+        setter = getattr(self.http, "set_cached_text", None)
+        if setter is None:
+            return
+        try:
+            setter(url, text, KIPRIS_CACHE_TTL)
+        except Exception:  # pragma: no cover - cache writes must never fail a call
+            logger.warning("KIPRIS cache write failed; continuing without cache.", exc_info=True)
 
     def _patent(self, item: ElementTree.Element) -> PatentItem:
         title = self._text(item.find("InventionName")) or UNTITLED_PATENT
         assignee = self._text(item.find("Applicant"))
         application_number = self._text(item.find("ApplicationNumber"))
-        # Prefer a published/registered number for the public-facing link.
-        publication_number = (
+        # A true publication/registration number (maps to a Google Patents KR
+        # page); the application number is NOT one of these and is tracked
+        # separately for the display fallback below.
+        registered_number = (
             self._text(item.find("PublicNumber"))
             or self._text(item.find("OpeningNumber"))
             or self._text(item.find("RegistrationNumber"))
-            or application_number
         )
+        # Prefer a published/registered number for the public-facing identifier,
+        # falling back to the application number when nothing else exists.
+        publication_number = registered_number or application_number
         application_date = self._format_date(self._text(item.find("ApplicationDate")))
         return PatentItem(
             id=application_number or publication_number or UNTITLED_PATENT,
             publication_number=publication_number or "",
             title=title,
-            url=self._url(publication_number, application_number, word=title),
+            url=self._url(registered_number, word=title),
             assignee=assignee,
             date=application_date,
             source=self.name,
@@ -825,21 +885,21 @@ class KiprisProvider:
 
     @staticmethod
     def _url(
-        publication_number: str | None,
-        application_number: str | None,
+        registered_number: str | None,
         *,
         word: str,
     ) -> str:
         """Best-effort link for a KIPRIS hit.
 
-        Prefer a Google Patents KR link built from the publication number
-        (falling back to the application number); when no usable number exists,
-        fall back to a KIPRIS keyword search URL.
+        Build a Google Patents KR link only from a PUBLICATION/registration
+        number (PublicNumber/OpeningNumber/RegistrationNumber). Korean
+        APPLICATION numbers do not map to Google Patents publication URLs, so
+        when only an application number (or nothing) is available we fall back to
+        a KIPRIS keyword search URL instead of emitting a dead link.
         """
-        for raw in (publication_number, application_number):
-            digits = re.sub(r"\D", "", raw or "")
-            if digits:
-                return f"https://patents.google.com/patent/KR{digits}"
+        digits = re.sub(r"\D", "", registered_number or "")
+        if digits:
+            return f"https://patents.google.com/patent/KR{digits}"
         return (
             "https://www.kipris.or.kr/khome/search/searchResult.do"
             f"?word={quote(word, safe='')}"

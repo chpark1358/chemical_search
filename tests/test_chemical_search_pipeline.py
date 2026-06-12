@@ -542,6 +542,43 @@ class PipelineBehaviorTests(unittest.TestCase):
         self.assertEqual(report.patents[0].source, "google_patents")
         self.assertEqual(report.patents[0].title, "From Google")
 
+    def test_cross_source_dedup_collapses_hyphen_variants(self):
+        # Google keeps the raw "CN-102369480-A" while SureChEMBL strips hyphens
+        # ("CN102369480A"); normalized dedup must collapse them to one record
+        # (Google first-seen wins) with Google's original display string.
+        google_patents = FakeGooglePatentsProvider(
+            [
+                PatentItem(
+                    id="CN-102369480-A",
+                    publication_number="CN-102369480-A",
+                    title="From Google",
+                    source="google_patents",
+                )
+            ]
+        )
+        surechembl = FakeSureChemblProvider(
+            [
+                PatentItem(
+                    id="CN102369480A",
+                    publication_number="CN102369480A",
+                    title="From SureChEMBL",
+                    source="surechembl",
+                )
+            ]
+        )
+        pipeline = make_pipeline(
+            FakePaperProvider("semantic_scholar", status="empty"),
+            FakePaperProvider("crossref", status="empty"),
+            google_patents=google_patents,
+            surechembl=surechembl,
+        )
+
+        report = pipeline.run_papers("aspirin", aspirin_candidate(), sources=None)
+
+        self.assertEqual(len(report.patents), 1)
+        self.assertEqual(report.patents[0].source, "google_patents")
+        self.assertEqual(report.patents[0].publication_number, "CN-102369480-A")
+
     def test_patents_are_deduplicated_by_publication_number(self):
         surechembl = FakeSureChemblProvider(
             [

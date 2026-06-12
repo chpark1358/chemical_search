@@ -685,6 +685,47 @@ test("Stage 3: 공유 가능한 ?q= URL이 로드 시 자동 검색을 실행한
   await expect(page.getByPlaceholder(/물질명.*SMILES/)).toHaveValue("aspirin");
 });
 
+test("세션 만료(401): 폴링 중 401이면 재로그인 안내 배너가 표시된다", async ({
+  page
+}) => {
+  // create는 running으로 시작하지만, 폴링 GET이 401을 돌려주면(세션 만료)
+  // '응답 지연'이 아니라 재로그인 안내로 전환되어야 한다.
+  await page.route("**/chemical-api/**", async (route) => {
+    const url = new URL(route.request().url());
+    const method = route.request().method();
+    const path = url.pathname.replace(/^.*\/chemical-api/, "");
+    if (method === "POST" && path === "/api/searches") {
+      return fulfillJson(route, record({ status: "running" }));
+    }
+    if (method === "GET" && /^\/api\/searches\/[^/]+$/.test(path)) {
+      // 미들웨어가 만료된 세션에 돌려주는 것과 동일한 401 JSON.
+      return route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "로그인이 필요합니다. 다시 로그인해 주세요." })
+      });
+    }
+    return route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "검색을 찾을 수 없습니다." })
+    });
+  });
+
+  await page.goto("/");
+  await submitQuery(page, "aspirin");
+
+  const banner = page.getByTestId("status-banner");
+  await expect(banner).toContainText("세션이 만료되었습니다", { timeout: 15_000 });
+  await expect(banner).toContainText("다시 로그인해 주세요");
+  // '응답 지연'(pollFailed) 문구가 아니어야 한다.
+  await expect(banner).not.toContainText("응답이 지연");
+  // 재로그인 링크가 현재 경로를 ?next=로 보존한다.
+  const loginLink = page.getByTestId("status-banner-login");
+  await expect(loginLink).toBeVisible();
+  await expect(loginLink).toHaveAttribute("href", /\/login(\?next=)?/);
+});
+
 test("실패 흐름: failed 상태에서 오류 메시지와 다시 시도 버튼 표시", async ({ page }) => {
   await mockApi(page, {
     create: () =>

@@ -18,7 +18,13 @@ export type SearchPhase =
   | "done"
   | "partial"
   | "failed"
-  | "pollFailed";
+  | "pollFailed"
+  | "unauthorized";
+
+/** ApiError 401(세션 만료/미인증) 여부. 재로그인 흐름 분기에 쓴다. */
+function isUnauthorized(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 401;
+}
 
 const POLL_INTERVAL_MS = 1_200;
 const POLL_BACKOFF_INTERVAL_MS = 3_000;
@@ -128,6 +134,13 @@ export function usePaperSearch(): PaperSearchState {
       applyRecord(generation, next);
     } catch (error) {
       if (generation !== generationRef.current) return;
+      if (isUnauthorized(error)) {
+        // 검색 도중 세션이 만료됨 — 401은 지연(pollFailed)이 아니라 인증 문제이므로
+        // 전용 상태로 전환해 재로그인을 안내한다.
+        clearTimer();
+        setPhaseSafe("unauthorized");
+        return;
+      }
       if (error instanceof ApiError && error.status === 404) {
         // 검색 레코드가 서버에서 만료됨(TTL/축출/재시작) — 재폴링해도 살아나지 않으므로
         // failed로 전환한다. failed에서의 재시도는 lastQuery로 새 검색을 제출한다.
@@ -154,6 +167,10 @@ export function usePaperSearch(): PaperSearchState {
       applyRecord(generation, created);
     } catch (error) {
       if (generation !== generationRef.current) return;
+      if (isUnauthorized(error)) {
+        setPhaseSafe("unauthorized");
+        return;
+      }
       setErrorMessage(
         error instanceof Error ? error.message : "검색을 시작하지 못했습니다."
       );
@@ -172,6 +189,10 @@ export function usePaperSearch(): PaperSearchState {
       applyRecord(generation, next);
     } catch (error) {
       if (generation !== generationRef.current) return;
+      if (isUnauthorized(error)) {
+        setPhaseSafe("unauthorized");
+        return;
+      }
       setErrorMessage(
         error instanceof Error ? error.message : "후보를 선택하지 못했습니다."
       );

@@ -11,6 +11,8 @@ interface PatentListProps {
   onSelect: (index: number) => void;
   /** 필터 적용 전 원본 특허가 1건 이상 있었는지(0건과 "필터로 모두 숨김" 구분용). */
   filtered?: boolean;
+  /** 클라이언트 필터(출처/국가/키워드)가 현재 적용 중인지. 적용 중이면 "전체" 힌트가 거짓이 된다. */
+  filterActive?: boolean;
   onResetFilters?: () => void;
   /** 행 다중 선택 체크 여부 판별과 토글. */
   isChecked: (patent: Patent) => boolean;
@@ -26,6 +28,7 @@ export default function PatentList({
   selectedIndex,
   onSelect,
   filtered = false,
+  filterActive = false,
   onResetFilters,
   isChecked,
   onToggleCheck,
@@ -60,21 +63,28 @@ export default function PatentList({
   return (
     <div className="flex flex-col gap-3">
       {totalHits !== null ? (
-        <p className="flex items-center gap-1.5 text-sm text-ink-muted">
-          상위 <span className="font-mono">{patents.length}</span>건
-          <span className="text-ink-tertiary">
-            {" "}
-            / 전체 <span className="font-mono">{totalHits.toLocaleString()}</span>건
-          </span>
-          <span
-            aria-label={`전체 ${totalHits.toLocaleString()}건 중 관련도 상위 ${patents.length}건만 표시합니다.`}
-            className="inline-flex cursor-help text-ink-tertiary transition-colors duration-150 hover:text-ink-subtle"
-            tabIndex={0}
-            title={`전체 ${totalHits.toLocaleString()}건 중 관련도 상위 ${patents.length}건만 표시합니다.`}
-          >
-            <Info aria-hidden="true" className="size-3.5" />
-          </span>
-        </p>
+        filterActive ? (
+          // 클라이언트 필터가 적용 중이면 "전체 N건" 힌트는 사실과 다르므로 필터된 건수만 보여준다.
+          <p className="text-sm text-ink-muted">
+            필터 결과 <span className="font-mono">{patents.length}</span>건
+          </p>
+        ) : (
+          <p className="flex items-center gap-1.5 text-sm text-ink-muted">
+            상위 <span className="font-mono">{patents.length}</span>건
+            <span className="text-ink-tertiary">
+              {" "}
+              / 전체 <span className="font-mono">{totalHits.toLocaleString()}</span>건
+            </span>
+            <span
+              aria-label={`전체 ${totalHits.toLocaleString()}건 중 관련도 상위 ${patents.length}건만 표시합니다.`}
+              className="inline-flex cursor-help text-ink-tertiary transition-colors duration-150 hover:text-ink-subtle"
+              tabIndex={0}
+              title={`전체 ${totalHits.toLocaleString()}건 중 관련도 상위 ${patents.length}건만 표시합니다.`}
+            >
+              <Info aria-hidden="true" className="size-3.5" />
+            </span>
+          </p>
+        )
       ) : null}
       <ul
         className="panel-highlight overflow-hidden rounded-xl border border-hairline bg-surface-1"

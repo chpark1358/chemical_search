@@ -9,7 +9,7 @@ export default function EmptyState() {
       </h1>
       <p className="max-w-md text-sm leading-6 text-ink-subtle">
         물질명, SMILES, InChIKey, 분자식을 입력하면 PubChem으로 구조를 확인하고
-        OpenAlex·Crossref의 논문과 SureChEMBL·KIPRIS의 특허를 모아 보여 드립니다.
+        OpenAlex·Crossref의 논문과 Google Patents·SureChEMBL·KIPRIS의 특허를 모아 보여 드립니다.
       </p>
     </div>
   );

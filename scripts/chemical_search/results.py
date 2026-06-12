@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from copy import deepcopy
 from typing import Iterable
 
@@ -13,6 +14,10 @@ VALID_SORTS = ("relevance", "citations", "year")
 
 # Duplicate-merge preference: the most metadata-rich provider record wins.
 SOURCE_PREFERENCE = ("semantic_scholar", "openalex", "crossref")
+
+# Non-alphanumeric characters stripped from a publication number before
+# comparing it across patent sources (see ``_normalize_publication_number``).
+_PATENT_KEY_STRIP_RE = re.compile(r"[^A-Za-z0-9]")
 
 
 def merge_papers(
@@ -57,17 +62,33 @@ def dedup_patents(patents: list[PatentItem]) -> list[PatentItem]:
     first-seen-wins determines which source represents a shared document; the
     caller orders the input list to control that preference. Patents without a
     publication number are always kept.
+
+    Sources format the same publication number differently — Google Patents
+    keeps the raw value (e.g. "CN-102369480-A") while SureChEMBL strips hyphens
+    ("CN102369480A"). We therefore compare by a NORMALIZED key (alphanumeric
+    characters only, upper-cased) so those variants dedupe across sources, while
+    each surviving record keeps its source's original ``publication_number`` for
+    display.
     """
     seen: set[str] = set()
     unique: list[PatentItem] = []
     for patent in patents:
-        key = patent.publication_number
+        key = _normalize_publication_number(patent.publication_number)
         if key and key in seen:
             continue
         if key:
             seen.add(key)
         unique.append(patent)
     return unique
+
+
+def _normalize_publication_number(publication_number: str) -> str:
+    """Normalize a publication number for cross-source duplicate detection.
+
+    Strips every non-alphanumeric character (hyphens, spaces) and upper-cases
+    the result so "CN-102369480-A" and "cn102369480a" map to the same key.
+    """
+    return _PATENT_KEY_STRIP_RE.sub("", publication_number).upper()
 
 
 def _find_duplicate(merged: list[PaperItem], paper: PaperItem) -> int | None:

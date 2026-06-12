@@ -42,15 +42,22 @@ def _build_query(name: str) -> str:
     The name is embedded as a quoted Korean (``@ko``) string literal, matching
     either ``rdfs:label`` or ``skos:altLabel``, and returns the first item with
     a PubChem CID plus an optional InChIKey.
+
+    An exact ``rdfs:label`` match is preferred over an ``skos:altLabel`` match:
+    a homonymous Korean altLabel can point at the wrong compound, whereas the
+    primary label is the canonical Korean name. Each branch is tagged with a
+    ``?labelMatch`` flag (1 for the primary label, 0 for an altLabel) and the
+    results are ordered so label matches sort first before ``LIMIT 1`` picks the
+    single best item.
     """
     escaped = name.replace("\\", "\\\\").replace('"', '\\"')
     return (
-        "SELECT ?item ?cid ?inchikey WHERE { "
-        f'{{ ?item rdfs:label "{escaped}"@ko. }} '
-        f'UNION {{ ?item skos:altLabel "{escaped}"@ko. }} '
+        "SELECT ?item ?cid ?inchikey ?labelMatch WHERE { "
+        f'{{ ?item rdfs:label "{escaped}"@ko. BIND(1 AS ?labelMatch) }} '
+        f'UNION {{ ?item skos:altLabel "{escaped}"@ko. BIND(0 AS ?labelMatch) }} '
         "?item wdt:P662 ?cid. "
         "OPTIONAL { ?item wdt:P235 ?inchikey. } "
-        "} LIMIT 1"
+        "} ORDER BY DESC(?labelMatch) LIMIT 1"
     )
 
 

@@ -2,6 +2,15 @@
 
 export type ResultTab = "papers" | "patents";
 
+/** 탭 버튼과 패널을 ARIA로 연결하기 위한 안정 id 헬퍼. */
+export function resultTabId(tab: ResultTab): string {
+  return `result-tab-${tab}`;
+}
+
+export function resultPanelId(tab: ResultTab): string {
+  return `result-panel-${tab}`;
+}
+
 interface ResultTabsProps {
   active: ResultTab;
   paperCount: number;
@@ -35,6 +44,7 @@ export default function ResultTabs({
         const isActive = active === tab.id;
         return (
           <button
+            aria-controls={resultPanelId(tab.id)}
             aria-selected={isActive}
             className={`rounded-md px-3 py-1 text-sm transition-colors duration-150 ${
               isActive
@@ -42,9 +52,11 @@ export default function ResultTabs({
                 : "text-ink-subtle hover:bg-surface-2 hover:text-ink-muted"
             }`}
             data-testid={`result-tab-${tab.id}`}
+            id={resultTabId(tab.id)}
             key={tab.id}
             onClick={() => onChange(tab.id)}
             role="tab"
+            tabIndex={isActive ? 0 : -1}
             type="button"
           >
             {tab.label}{" "}

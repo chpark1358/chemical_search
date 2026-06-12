@@ -10,6 +10,8 @@
  * 유지해 useSyncExternalStore 무한 루프를 피한다.
  */
 
+import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
+
 import type { Paper, Patent } from "./api";
 import { paperKey, patentKey } from "./papers";
 import { createClient } from "./supabase/client";
@@ -86,6 +88,19 @@ function rowToItem(row: SavedRow): SavedItem {
   };
 }
 
+/** Supabase 오류가 인증(401)인지 판별한다. 401이면 단순 롤백 대신 재로그인 흐름으로 넘긴다. */
+function isAuthError(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  const code = error.code ?? "";
+  const message = (error.message ?? "").toLowerCase();
+  return (
+    code === "401" ||
+    code === "PGRST301" ||
+    message.includes("jwt") ||
+    message.includes("unauthorized")
+  );
+}
+
 // ── 모듈 레벨 스토어 ─────────────────────────────────────────────────────────
 
 const EMPTY: SavedItem[] = [];
@@ -133,20 +148,34 @@ export function refreshSaved(): void {
 }
 
 // 세션이 쿠키에서 하이드레이트되기 전에 첫 load()가 익명으로 0건을 받는 레이스를
-// 막기 위해, 인증 상태가 준비/변경되면 재조회한다. 로그아웃 시에는 캐시를 비운다.
+// 막기 위해, 인증 상태가 준비/변경되면 재조회한다. 로그아웃 시에는 스토어를 완전히 리셋한다.
 let authWired = false;
+let authSubscription: { unsubscribe: () => void } | null = null;
 function ensureAuthWired(): void {
   if (authWired) return;
   authWired = true;
-  createClient().auth.onAuthStateChange((event, session) => {
-    if (event === "SIGNED_OUT") {
-      loaded = true;
-      setSnapshot([]);
-    } else if (session) {
-      // INITIAL_SESSION / SIGNED_IN / TOKEN_REFRESHED: 토큰이 준비된 시점에 재조회.
-      void load();
+  const { data } = createClient().auth.onAuthStateChange(
+    (event: AuthChangeEvent, session: Session | null) => {
+      if (event === "SIGNED_OUT") {
+        // 스토어를 완전히 리셋한다(다른 사용자가 로그인하면 깨끗하게 재조회되도록).
+        loaded = false;
+        loading = false;
+        setSnapshot([]);
+      } else if (session) {
+        // INITIAL_SESSION / SIGNED_IN / TOKEN_REFRESHED: 토큰이 준비된 시점에 재조회.
+        void load();
+      }
     }
-  });
+  );
+  // 구독 핸들을 보관한다(누수 방지·테스트 정리용).
+  authSubscription = data.subscription;
+}
+
+/** 인증 리스너를 해제한다(주로 테스트/정리용). */
+export function teardownSavedAuth(): void {
+  authSubscription?.unsubscribe();
+  authSubscription = null;
+  authWired = false;
 }
 
 /** 변경 구독. 첫 구독 시 1회 fetch하고 인증 변화에 재조회를 연결한다. */
@@ -207,13 +236,32 @@ function buildPatentItem(patent: Patent, compoundName: string | null): SavedItem
   };
 }
 
-async function upsertRow(item: SavedItem): Promise<void> {
+/**
+ * 변이 실패를 처리한다. 401(세션 만료)이면 재로그인 흐름에 맡기고 낙관적 상태를
+ * 그대로 둔다(load()는 호출하지 않는다). 그 외 오류는 이전 스냅샷으로 명시적 롤백한다.
+ */
+function handleMutationFailure(
+  prev: SavedItem[],
+  error: { code?: string; message?: string } | null
+): void {
+  if (isAuthError(error)) {
+    console.warn("[savedItems] 세션이 만료되었습니다. 다시 로그인해 주세요.");
+    return;
+  }
+  console.warn("[savedItems] 저장 변경에 실패해 이전 상태로 되돌립니다.", error);
+  setSnapshot(prev);
+}
+
+async function upsertRow(item: SavedItem, prev: SavedItem[]): Promise<void> {
   try {
     const supabase = createClient();
     const {
       data: { user }
     } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) {
+      handleMutationFailure(prev, { code: "401" });
+      return;
+    }
     const { error } = await supabase.from("saved_items").upsert(
       {
         user_id: user.id,
@@ -228,9 +276,9 @@ async function upsertRow(item: SavedItem): Promise<void> {
       },
       { onConflict: "user_id,item_key" }
     );
-    if (error) void load();
-  } catch {
-    void load();
+    if (error) handleMutationFailure(prev, error);
+  } catch (error) {
+    handleMutationFailure(prev, error as { code?: string; message?: string });
   }
 }
 
@@ -238,35 +286,47 @@ async function upsertRow(item: SavedItem): Promise<void> {
 export function addPaper(paper: Paper, compoundName: string | null): void {
   const key = savedKeyForPaper(paper);
   if (snapshot.some((item) => item.key === key)) return;
+  const prev = snapshot;
   const item = buildPaperItem(paper, compoundName);
   setSnapshot([item, ...snapshot]);
-  void upsertRow(item);
+  void upsertRow(item, prev);
 }
 
 /** 특허를 저장한다(이미 있으면 그대로 둔다). */
 export function addPatent(patent: Patent, compoundName: string | null): void {
   const key = savedKeyForPatent(patent);
   if (snapshot.some((item) => item.key === key)) return;
+  const prev = snapshot;
   const item = buildPatentItem(patent, compoundName);
   setSnapshot([item, ...snapshot]);
-  void upsertRow(item);
+  void upsertRow(item, prev);
 }
 
 /** 저장 항목 제거(키 기준). 낙관적으로 캐시에서 제거 후 삭제. */
 export function removeSaved(key: string): void {
   const existed = snapshot.some((item) => item.key === key);
   if (!existed) return;
+  const prev = snapshot;
   setSnapshot(snapshot.filter((item) => item.key !== key));
   void (async () => {
     try {
       const supabase = createClient();
+      // 방어적 심층 방어: RLS에 더해 user_id로도 스코프한다.
+      const {
+        data: { user }
+      } = await supabase.auth.getUser();
+      if (!user) {
+        handleMutationFailure(prev, { code: "401" });
+        return;
+      }
       const { error } = await supabase
         .from("saved_items")
         .delete()
+        .eq("user_id", user.id)
         .eq("item_key", key);
-      if (error) void load();
-    } catch {
-      void load();
+      if (error) handleMutationFailure(prev, error);
+    } catch (error) {
+      handleMutationFailure(prev, error as { code?: string; message?: string });
     }
   })();
 }
@@ -277,6 +337,7 @@ export type SavedItemPatch = Partial<Pick<SavedItem, "customTitle" | "memo" | "t
 export function updateSaved(key: string, patch: SavedItemPatch): void {
   const target = snapshot.find((item) => item.key === key);
   if (!target) return;
+  const prev = snapshot;
   const merged: SavedItem = { ...target, ...patch };
   setSnapshot(snapshot.map((item) => (item.key === key ? merged : item)));
 
@@ -292,9 +353,9 @@ export function updateSaved(key: string, patch: SavedItemPatch): void {
         .from("saved_items")
         .update(dbPatch)
         .eq("item_key", key);
-      if (error) void load();
-    } catch {
-      void load();
+      if (error) handleMutationFailure(prev, error);
+    } catch (error) {
+      handleMutationFailure(prev, error as { code?: string; message?: string });
     }
   })();
 }
@@ -302,6 +363,7 @@ export function updateSaved(key: string, patch: SavedItemPatch): void {
 /** 전체 비우기. */
 export function clearSaved(): void {
   if (!snapshot.length) return;
+  const prev = snapshot;
   setSnapshot([]);
   void (async () => {
     try {
@@ -309,14 +371,17 @@ export function clearSaved(): void {
       const {
         data: { user }
       } = await supabase.auth.getUser();
-      if (!user) return;
+      if (!user) {
+        handleMutationFailure(prev, { code: "401" });
+        return;
+      }
       const { error } = await supabase
         .from("saved_items")
         .delete()
         .eq("user_id", user.id);
-      if (error) void load();
-    } catch {
-      void load();
+      if (error) handleMutationFailure(prev, error);
+    } catch (error) {
+      handleMutationFailure(prev, error as { code?: string; message?: string });
     }
   })();
 }

@@ -212,6 +212,52 @@ class HttpClientTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status, "error")
 
+    def test_set_and_get_cached_text_round_trip(self):
+        # Success-only caching helper used by KIPRIS: write a text body, read it
+        # back under the same GET text key, and confirm get_text serves it
+        # without a network call.
+        with tempfile.TemporaryDirectory() as directory:
+            client = HttpClient(cache_dir=Path(directory), min_interval_seconds=0)
+            client.session = FakeSession([])  # would IndexError on any fetch
+            url = "https://kipo-api.example/search?word=x"
+            xml = "<response><resultCode>00</resultCode></response>"
+
+            self.assertIsNone(client.get_cached_text(url))
+            client.set_cached_text(url, xml, 60)
+
+            self.assertEqual(client.get_cached_text(url), xml)
+            served, diag = client.get_text(url, cache_ttl_seconds=0)
+            self.assertEqual(served, xml)
+            self.assertTrue(diag.cached)
+            self.assertEqual(client.session.calls, 0)
+
+    def test_set_cached_text_with_zero_ttl_is_not_cached(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = HttpClient(cache_dir=Path(directory), min_interval_seconds=0)
+            url = "https://kipo-api.example/search?word=y"
+
+            client.set_cached_text(url, "<r/>", 0)
+
+            self.assertIsNone(client.get_cached_text(url))
+
+    def test_get_text_with_zero_ttl_does_not_cache(self):
+        # With cache_ttl_seconds=0 a fetched body must NOT be auto-cached, so a
+        # second call hits the network again (KIPRIS relies on this to avoid
+        # pinning error responses).
+        with tempfile.TemporaryDirectory() as directory:
+            client = HttpClient(cache_dir=Path(directory), min_interval_seconds=0)
+            client.session = FakeSession(
+                [FakeResponse(200, {}, text="<a/>"), FakeResponse(200, {}, text="<b/>")]
+            )
+
+            first, _ = client.get_text("https://kipo-api.example/s", cache_ttl_seconds=0)
+            second, _ = client.get_text("https://kipo-api.example/s", cache_ttl_seconds=0)
+
+            self.assertEqual(first, "<a/>")
+            self.assertEqual(second, "<b/>")
+            self.assertEqual(client.session.calls, 2)
+            self.assertIsNone(client.get_cached_text("https://kipo-api.example/s"))
+
     def test_per_request_user_agent_overrides_session_default(self):
         client = HttpClient(cache_enabled=False, min_interval_seconds=0)
         client.session = FakeSession([FakeResponse(200, {"ok": True})])

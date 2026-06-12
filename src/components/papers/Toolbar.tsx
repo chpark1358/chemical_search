@@ -20,7 +20,7 @@ interface ToolbarProps {
   availableSources: PaperSourceName[];
   /** 중복 접기 켜짐 여부. */
   fold: boolean;
-  /** 다중 선택 상태. */
+  /** 다중 선택 상태. 내보내기와 같은 기준(현재 보이는 선택 항목 수)을 쓴다. */
   selectedCount: number;
   allSelected: boolean;
   /** 내보내기용: 현재 보이는 논문과 선택된 논문. */

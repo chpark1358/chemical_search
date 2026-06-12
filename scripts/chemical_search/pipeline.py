@@ -362,6 +362,14 @@ class SearchPipeline:
         patents = dedup_patents(patent_items)
         # patents_total_hits is the sum of each patent source's reported total;
         # None when no patent source reported a count (e.g. none selected).
+        #
+        # NOTE: this is an UPSTREAM-reported upper bound, not the deduped count.
+        # Each source reports its own "전체 N건" independently, and the same
+        # patent can be counted by several sources, so summing OVER-counts after
+        # dedup_patents() collapses cross-source duplicates. We intentionally
+        # keep the sum: it is only a "roughly how many exist" hint for the 특허
+        # tab, and the frontend labels it as an approximate upper bound rather
+        # than implying it equals len(patents).
         patents_total_hits = sum(total_hits_parts) if total_hits_parts else None
 
         papers = merge_papers(paper_lists, sort=sort)[:limit]

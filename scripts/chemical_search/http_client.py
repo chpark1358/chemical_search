@@ -145,6 +145,37 @@ class HttpClient:
             retries=retries,
         )
 
+    def get_cached_text(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> str | None:
+        """Return a previously cached text body for ``url`` (or None on a miss).
+
+        Shares the GET text cache key with ``get_text``/``_request_text`` so a
+        caller can decide for itself whether the response is worth caching. KIPRIS
+        uses this to cache only successful (``resultCode == "00"``) XML bodies and
+        leave quota/error responses uncached (see ``set_cached_text``).
+        """
+        cache_key = self._cache_key("GET", url, headers or {}, None)
+        cached = self.cache.get(cache_key)
+        return cached if isinstance(cached, str) else None
+
+    def set_cached_text(
+        self,
+        url: str,
+        text: str,
+        cache_ttl_seconds: int,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        """Write a text body to the GET text cache under the same key as
+        ``get_text``. Used by callers (e.g. KIPRIS) that fetch with
+        ``cache_ttl_seconds=0`` and then cache only known-good responses."""
+        cache_key = self._cache_key("GET", url, headers or {}, None)
+        self._cache_set(cache_key, text, cache_ttl_seconds)
+
     def _cache_key(
         self,
         method: str,
